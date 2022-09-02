@@ -1,0 +1,5 @@
+{
+    "serverName": "replaceme",
+    "serverPort": 42069,
+    "address": "redis://172.17.0.1:6379"
+}
