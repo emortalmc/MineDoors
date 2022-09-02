@@ -179,6 +179,7 @@ extensions/
 build/
 logs/
 rooms/
+roomslobby/
 *.tnt
 *.mca
 *.schem
