@@ -178,8 +178,10 @@ lobby/
 extensions/
 build/
 logs/
+rooms/
 *.tnt
 *.mca
+*.schem
 
 # Ignore Gradle GUI config
 gradle-app.setting
