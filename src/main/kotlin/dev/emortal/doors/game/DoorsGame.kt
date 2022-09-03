@@ -199,12 +199,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
             }
 
             if (message == "achieve") {
-                val notif = Notification(
-                    Component.text("Buddy System", NamedTextColor.WHITE),
-                    FrameType.TASK,
-                    ItemStack.of(Material.RED_TULIP)
-                )
-                NotificationCenter.send(notif, player)
+                Achievement.BUDDY.send(player)
             }
 
             if (message == "eyes") {
