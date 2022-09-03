@@ -15,7 +15,7 @@ import kotlin.math.min
 
 data class RoomBounds(val topLeft: Point, val bottomRight: Point) {
 
-    fun print(player: Player) {
+    fun visualize(player: Player) {
         val firstMinX = min(topLeft.blockX(), bottomRight.blockX()) + 1
         val firstMinZ = min(topLeft.blockZ(), bottomRight.blockZ()) + 1
         val firstMaxX = max(topLeft.blockX(), bottomRight.blockX())

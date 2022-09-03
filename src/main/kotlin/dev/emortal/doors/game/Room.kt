@@ -173,8 +173,6 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
     val number = game.roomNum.incrementAndGet()
 
     fun applyRoom(schemList: Collection<SpongeSchematic> = schematics): CompletableFuture<Void>? {
-        val rand = ThreadLocalRandom.current()
-
         val randomSchem = schematics.shuffled().firstOrNull { schem ->
             val bounds = schem.bounds(position, direction)
             val doors = schem.doors(position, direction)
@@ -209,7 +207,6 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
         }
 
         val doorPositions = mutableSetOf<Pair<Point, Direction>>()
-        val doorAboveBlocks = mutableSetOf<Block>()
         val paintingPositions = mutableSetOf<Pair<Point, Direction>>()
 
         val batch = AbsoluteBlockBatch(BatchOption().setCalculateInverse(true))
@@ -228,8 +225,6 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
 
             // Initialize chests
             if (rotatedBlock.second.compare(Block.CHEST)) {
-                val direction = Direction.valueOf(rotatedBlock.second.getProperty("facing").uppercase())
-
                 chests.add(rotatedBlock.first)
                 batch.setBlock(rotatedBlock.first, rotatedBlock.second.withHandler(SingleChestHandler()))
                 return@apply
