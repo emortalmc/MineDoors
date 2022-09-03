@@ -514,10 +514,11 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
     private fun generateNextRoom(instance: Instance) {
         val oldActiveDoor = activeDoorPosition
+        val newRoomEntryPos = activeDoorPosition.add(activeDoorDirection.offset())
 
         generatingRoom.set(true)
 
-        val newRoom = Room(this@DoorsGame, instance, activeDoorPosition, activeDoorDirection)
+        val newRoom = Room(this@DoorsGame, instance, newRoomEntryPos, activeDoorDirection)
         val applyRoom = newRoom.applyRoom()
 
         if (applyRoom == null) {
