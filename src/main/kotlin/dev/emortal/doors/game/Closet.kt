@@ -15,6 +15,7 @@ import net.minestom.server.entity.Player
 import net.minestom.server.instance.Instance
 import net.minestom.server.instance.block.Block
 import net.minestom.server.sound.SoundEvent
+import net.minestom.server.tag.Tag
 import net.minestom.server.timer.Task
 import net.minestom.server.timer.TaskSchedule
 import net.minestom.server.utils.Direction
@@ -25,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap
 data class Closet(val doorDirection: Direction, val rotatedDir: Direction, val yOffset: Double, val pos: Pos) {
     companion object {
         val hidingTaskMap = ConcurrentHashMap<UUID, Task>()
+        val canLeaveTag = Tag.Boolean("canLeaveCloset")
 
         fun getFromDoor(block: Block, blockPosition: Point): Closet {
             val doorDirection = Direction.valueOf(block.getProperty("facing").uppercase())
@@ -75,11 +77,13 @@ data class Closet(val doorDirection: Direction, val rotatedDir: Direction, val y
 
         hidingTaskMap[player.uuid]?.cancel()
         hidingTaskMap.remove(player.uuid)
+
+        player.removeTag(canLeaveTag)
     }
 
     fun handleInteraction(player: Player, blockPosition: Point, block: Block, instance: Instance) {
         if (player.hasTag(DoorsGame.hidingTag)) {
-            stopHiding(player, blockPosition, block, instance)
+            if(player.hasTag(canLeaveTag)) stopHiding(player, blockPosition, block, instance)
         } else if (instance.getBlock(pos).compare(Block.STRUCTURE_VOID)) {
             player.sendActionBar(Component.text("There is already someone hiding there", NamedTextColor.RED))
         } else {
@@ -93,14 +97,15 @@ data class Closet(val doorDirection: Direction, val rotatedDir: Direction, val y
             player.getAttribute(Attribute.MOVEMENT_SPEED).baseValue = 0f
             player.setTag(DoorsGame.hidingTag, true)
 
+            player.scheduler().buildTask { player.setTag(canLeaveTag, true) }.delay(Duration.ofMillis(350)).schedule()
+
             hidingTaskMap[player.uuid] = player.scheduler().buildTask(object : Runnable {
+                val titles = listOf("Get out", "get out", "Get out!", "Leave", "leave", "Leave!", "out", "Out", "Out!")
                 var iter = 0
                 var mod = 25
 
                 override fun run() {
                     if (mod <= 0 || iter % mod == 0) {
-                        val titles = listOf("Get out", "get out", "Get out!", "Leave", "leave", "Leave!", "out", "Out", "Out!")
-
                         player.showTitle(
                             Title.title(
                                 Component.text(titles.random(), NamedTextColor.GRAY),
