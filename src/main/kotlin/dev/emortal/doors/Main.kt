@@ -13,12 +13,15 @@ import dev.hypera.scaffolding.schematic.impl.SpongeSchematic
 import net.kyori.adventure.text.Component
 import net.minestom.server.MinecraftServer
 import net.minestom.server.coordinate.Point
+import net.minestom.server.coordinate.Pos
 import net.minestom.server.coordinate.Vec
 import net.minestom.server.entity.GameMode
 import net.minestom.server.event.player.PlayerSpawnEvent
 import net.minestom.server.extras.MojangAuth
 import net.minestom.server.extras.bungee.BungeeCordProxy
 import net.minestom.server.extras.velocity.VelocityProxy
+import net.minestom.server.instance.DynamicChunk
+import net.minestom.server.instance.Instance
 import net.minestom.server.instance.block.Block
 import net.minestom.server.potion.Potion
 import net.minestom.server.potion.PotionEffect
@@ -29,6 +32,8 @@ import org.tinylog.kotlin.Logger
 import world.cepi.kstom.Manager
 import world.cepi.kstom.command.register
 import world.cepi.kstom.event.listenOnly
+import world.cepi.kstom.util.asPos
+import world.cepi.kstom.util.chunksInRange
 import world.cepi.kstom.util.register
 import java.io.IOException
 import java.io.InputStream
@@ -40,13 +45,28 @@ import kotlin.io.path.inputStream
 import kotlin.io.path.isDirectory
 
 
+fun Instance.relight(position: Pos) {
+    val chunks = chunksInRange(position.asPos(), 3).mapNotNull { getChunk(it.first, it.second) as? DynamicChunk }
+
+    chunks.forEach {
+        it.invalidate()
+        it.sections.forEach {
+            it.blockLight.invalidate()
+        }
+    }
+    chunks.forEach {
+        it.sendChunk()
+        sendGroupedPacket(it.createLightPacket())
+    }
+}
+
 val schematics = Files.list(Path.of("./rooms/"))
     .filter { !it.isDirectory() }
     .collect(Collectors.toSet()).map {
         val schem = SpongeSchematic()
         schem.read(it.inputStream())
 
-        println("Reading schematic ${it}")
+        Logger.info("Reading schematic ${it}")
 
         schem
     }
@@ -163,7 +183,7 @@ fun main() {
 
         ImmortalExtension.init(global)
     } catch (e: NoSuchFieldError) {
-        println("problem ignored! :)")
+        Logger.info("problem ignored! :)")
     }
 
     MinecraftServer.setBrandName("§dMinestom ${MinecraftServer.VERSION_NAME}")
@@ -177,8 +197,8 @@ fun main() {
         GameOptions(
             minPlayers = 0,
             maxPlayers = 30,
-
-            )
+            showScoreboard = false
+        )
     )
 
     GameManager.registerGame<DoorsGame>(
@@ -190,7 +210,7 @@ fun main() {
         GameOptions(
             minPlayers = 1,
             maxPlayers = 4,
-
+            showScoreboard = false
         )
     )
 

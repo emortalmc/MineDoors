@@ -5,10 +5,11 @@ import dev.emortal.doors.block.SignHandler
 import dev.emortal.doors.block.SingleChestHandler
 import dev.emortal.doors.doorSchem
 import dev.emortal.doors.game.DoorsGame.Companion.applyDoor
-import dev.emortal.doors.util.RoomBounds.Companion.isOverlapping
 import dev.emortal.doors.pathfinding.offset
+import dev.emortal.doors.relight
 import dev.emortal.doors.schematics
 import dev.emortal.doors.util.RoomBounds
+import dev.emortal.doors.util.RoomBounds.Companion.isOverlapping
 import dev.hypera.scaffolding.region.Region
 import dev.hypera.scaffolding.schematic.impl.SpongeSchematic
 import net.kyori.adventure.text.Component
@@ -21,16 +22,16 @@ import net.minestom.server.instance.Instance
 import net.minestom.server.instance.batch.AbsoluteBlockBatch
 import net.minestom.server.instance.batch.BatchOption
 import net.minestom.server.instance.block.Block
-import net.minestom.server.tag.Tag
 import net.minestom.server.utils.Direction
+import net.minestom.server.utils.time.TimeUnit
 import org.jglrxavpok.hephaistos.nbt.NBTCompound
 import org.jglrxavpok.hephaistos.parser.SNBTParser
+import org.tinylog.kotlin.Logger
 import world.cepi.kstom.util.asPos
 import java.io.StringReader
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CopyOnWriteArraySet
-import java.util.concurrent.ThreadLocalRandom
 
 
 val SpongeSchematic.offset: Point get() = Vec(offsetX.toDouble(), offsetY.toDouble(), offsetZ.toDouble())
@@ -149,10 +150,6 @@ fun SpongeSchematic.bounds(position: Point, direction: Direction): RoomBounds {
 class Room(val game: DoorsGame, val instance: Instance, val position: Point, val direction: Direction) {
 
     companion object {
-        val chestXTag = Tag.Integer("chestX")
-        val chestYTag = Tag.Integer("chestY")
-        val chestZTag = Tag.Integer("chestZ")
-
         val lightBlockTypes = setOf<Block>(
             Block.LANTERN,
             Block.REDSTONE_LAMP,
@@ -173,7 +170,7 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
     val number = game.roomNum.incrementAndGet()
 
     fun applyRoom(schemList: Collection<SpongeSchematic> = schematics): CompletableFuture<Void>? {
-        val randomSchem = schematics.shuffled().firstOrNull { schem ->
+        val randomSchem = schemList.shuffled().firstOrNull { schem ->
             val bounds = schem.bounds(position, direction)
             val doors = schem.doors(position, direction)
 
@@ -183,22 +180,20 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
             val noRooms = game.rooms.none { otherRoom ->
                 if (otherRoom.number + 1 == number) return@none false
 
-                val isOverlapping = isOverlapping(bounds, otherRoom.schematic.bounds(otherRoom.position, otherRoom.direction))
+                val otherRoomBounds = otherRoom.schematic.bounds(otherRoom.position, otherRoom.direction)
+
+                val isOverlapping = isOverlapping(bounds, otherRoomBounds)
                 val allDoorsOverlapping = doors.all { door ->
                     val doorbound = schem.bounds(door.first, door.second)
 
-                    isOverlapping(doorbound, otherRoom.schematic.bounds(otherRoom.position, otherRoom.direction))
+                    isOverlapping(doorbound, otherRoomBounds)
                 }
 
-                //println("overlap: ${isOverlapping}, doors: ${allDoorsOverlapping}")
-
                 isOverlapping || allDoorsOverlapping
-                //allDoorsOverlapping
             }
 
             noRooms
         }
-
 
 
         if (randomSchem == null) {
@@ -262,6 +257,8 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
         if (availableDoorPositions.isEmpty()) {
             batch.clear()
 
+            Logger.info("Available doors was empty")
+
             val newSchemList = schemList.filter { it != randomSchem }.filter {
                 val bounds = it.bounds(position, direction)
                 game.rooms.none { otherRoom ->
@@ -270,7 +267,7 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
                 }
             }
             if (newSchemList.isEmpty()) {
-                println("NO MORE ROOMS ARE AVAILABLE")
+                Logger.info("NO MORE ROOMS ARE AVAILABLE")
                 return null
             }
 
@@ -294,6 +291,7 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
         paintingPositions.forEach {
             val painting = Entity(EntityType.PAINTING)
             val meta = painting.entityMeta as PaintingMeta
+            // Remove paintings that are above 3 blocks wide and 2 blocks high
             meta.motive = PaintingMeta.Motive.values().filter { it.width <= 3*16 && it.height <= 2*16 }.random()
             meta.direction = it.second
 
@@ -327,6 +325,10 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
 
         val future = CompletableFuture<Void>()
         removalBatch = batch.apply(instance) {
+            instance.scheduler().buildTask {
+                instance.relight(position.asPos())
+            }.delay(2, TimeUnit.SERVER_TICK).schedule()
+
             future.complete(null)
         }!!
         return future

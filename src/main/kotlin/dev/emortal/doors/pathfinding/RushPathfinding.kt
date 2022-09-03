@@ -17,7 +17,7 @@ class RushPathfinding(val instance: Instance) {
 //        }
         val block = instance.getBlock(it.first)
         val blockAbove = instance.getBlock(it.first.add(0.0, 1.0, 0.0))
-        (block.isAir || block.compare(Block.IRON_DOOR)) && (blockAbove.isAir || blockAbove.compare(Block.IRON_DOOR))
+        (!block.isSolid || block.compare(Block.IRON_DOOR)) && (!blockAbove.isSolid || blockAbove.compare(Block.IRON_DOOR))
     }.map { PathNode(it.first) to it.second }
 
 //    fun neighboursDiag(point: Point) = Direction8.values().map { point.add(it.offX.toDouble(), 0.0, it.offZ.toDouble()) }.filter {
@@ -32,12 +32,15 @@ class RushPathfinding(val instance: Instance) {
         val openList = mutableSetOf<PathNode>(startNode)
         val closedList = mutableSetOf<Point>()
 
-        while (openList.isNotEmpty()) {
+        var iteration = 0
+
+        while (openList.isNotEmpty() && iteration < 500) {
+
+            iteration++
+
             val current = openList.minBy { it.f }
             openList.remove(current)
             closedList.add(current.pos)
-
-            if (closedList.size > 500) return null
 
             if (current.pos == target) {
                 // Found target!

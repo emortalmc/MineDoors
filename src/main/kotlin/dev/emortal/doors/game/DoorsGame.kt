@@ -7,11 +7,11 @@ import dev.emortal.doors.damage.HideDamage
 import dev.emortal.doors.pathfinding.RushPathfinding
 import dev.emortal.doors.pathfinding.offset
 import dev.emortal.doors.pathfinding.yaw
+import dev.emortal.doors.relight
 import dev.emortal.doors.util.MultilineHologramAEC
 import dev.emortal.doors.util.lerp
 import dev.emortal.immortal.config.GameOptions
 import dev.emortal.immortal.game.Game
-import dev.hypera.scaffolding.instance.SchematicChunkLoader
 import dev.hypera.scaffolding.schematic.impl.SpongeSchematic
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.sound.Sound
@@ -20,9 +20,6 @@ import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import net.kyori.adventure.text.minimessage.MiniMessage
 import net.kyori.adventure.title.Title
-import net.minestom.server.advancements.FrameType
-import net.minestom.server.advancements.notifications.Notification
-import net.minestom.server.advancements.notifications.NotificationCenter
 import net.minestom.server.attribute.Attribute
 import net.minestom.server.coordinate.Point
 import net.minestom.server.coordinate.Pos
@@ -35,11 +32,10 @@ import net.minestom.server.entity.metadata.other.ArmorStandMeta
 import net.minestom.server.event.player.PlayerBlockInteractEvent
 import net.minestom.server.event.player.PlayerChatEvent
 import net.minestom.server.event.player.PlayerMoveEvent
+import net.minestom.server.instance.Chunk
 import net.minestom.server.instance.Instance
 import net.minestom.server.instance.batch.AbsoluteBlockBatch
 import net.minestom.server.instance.block.Block
-import net.minestom.server.item.ItemStack
-import net.minestom.server.item.Material
 import net.minestom.server.network.packet.server.play.BlockActionPacket
 import net.minestom.server.network.packet.server.play.EntitySoundEffectPacket
 import net.minestom.server.potion.Potion
@@ -50,6 +46,7 @@ import net.minestom.server.timer.Task
 import net.minestom.server.timer.TaskSchedule
 import net.minestom.server.utils.Direction
 import net.minestom.server.utils.NamespaceID
+import net.minestom.server.utils.time.TimeUnit
 import world.cepi.kstom.Manager
 import world.cepi.kstom.event.listenOnly
 import world.cepi.kstom.util.asPos
@@ -57,12 +54,14 @@ import world.cepi.kstom.util.playSound
 import java.nio.file.Path
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.path.inputStream
+import kotlin.math.floor
 
 class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
@@ -94,9 +93,9 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
     override var spawnPosition = Pos(0.5, 0.0, 0.5, 180f, 0f)
 
-    val generatingRoom = AtomicBoolean(false)
 
-    val roomNum = AtomicInteger(0)
+
+    val roomNum = AtomicInteger(-1)
 
     val doorPositions = CopyOnWriteArrayList<Point>()
     val rooms = CopyOnWriteArrayList<Room>()
@@ -104,22 +103,40 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
     var activeDoorPosition: Point = Vec(8.0, 0.0, -19.0)
 
     val hidingTaskMap = ConcurrentHashMap<UUID, Task>()
-    lateinit var rushPathfinding: RushPathfinding
+    private lateinit var rushPathfinding: RushPathfinding
 
-    var doorOpenSecondsLeft: Int = 30
-    var doorTimerHologram = MultilineHologramAEC(mutableListOf(Component.text(doorOpenSecondsLeft, NamedTextColor.GOLD)))
-    var doorTask: Task? = null
+    val generatingRoom = AtomicBoolean(false)
+
+    private var doorOpenSecondsLeft: Int = 30
+    private var doorTimerHologram = MultilineHologramAEC(mutableListOf(Component.text(doorOpenSecondsLeft, NamedTextColor.GOLD)))
+    private var doorTask: Task? = null
 
     override fun gameStarted() {
         val instance = instance.get() ?: return
 
         rushPathfinding = RushPathfinding(instance)
 
-        instance.playSound(Sound.sound(Key.key("music.elevatorjam"), Sound.Source.MASTER, 0.6f, 1f), Sound.Emitter.self())
+        val startingSchematic = SpongeSchematic()
+        startingSchematic.read(Path.of("startingroom.schem").inputStream())
+
+        val futures = mutableListOf<CompletableFuture<Chunk>>()
+        for (x in -3..3) {
+            for (z in -3..3) {
+                futures.add(instance.loadChunk(x, z))
+            }
+        }
+
+        val lobbyRoom = Room(this, instance, spawnPosition, Direction.NORTH)
+
+        CompletableFuture.allOf(*futures.toTypedArray()).join()
+        lobbyRoom.applyRoom(listOf(startingSchematic))
+
+        instance.scheduler().buildTask {
+            instance.relight(spawnPosition)
+        }.delay(30, TimeUnit.SERVER_TICK).schedule()
 
         doorTimerHologram.setInstance(Pos(0.5, 0.5, -0.8), instance)
-        doorTask = Manager.scheduler.buildTask {
-            instance.sendMessage(Component.text(doorOpenSecondsLeft))
+        doorTask = instance.scheduler().buildTask {
             doorTimerHologram.setLine(0, Component.text(doorOpenSecondsLeft, NamedTextColor.GOLD))
 
             if (doorOpenSecondsLeft <= 0) {
@@ -134,7 +151,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
             }
 
             doorOpenSecondsLeft--
-        }.repeat(TaskSchedule.tick(20)).schedule()
+        }.repeat(20, TimeUnit.SERVER_TICK).schedule()
 
     }
 
@@ -143,6 +160,12 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
     }
 
     override fun playerJoin(player: Player) {
+        val msg = MiniMessage.miniMessage().deserialize("Press <light_purple><key:key.advancements><reset> to view your achievements.")
+        player.sendMessage(msg)
+        Achievements.create(player)
+
+        if (doorTask != null) player.playSound(Sound.sound(Key.key("music.elevatorjam"), Sound.Source.MASTER, 0.6f, 1f), Sound.Emitter.self())
+
         player.food = 0
         player.foodSaturation = 0f
         player.addEffect(Potion(PotionEffect.JUMP_BOOST, 200.toByte(), Short.MAX_VALUE.toInt()))
@@ -175,31 +198,9 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
         }
 
         eventNode.listenOnly<PlayerChatEvent> {
-            if (message == "lift") {
-                player.playSound(Sound.sound(Key.key("music.elevatorjam"), Sound.Source.MASTER, 0.8f, 1f), Sound.Emitter.self())
-            }
-            if (message == "deathmusic") {
-                player.playSound(Sound.sound(Key.key("music.guidinglight"), Sound.Source.MASTER, 0.8f, 1f), Sound.Emitter.self())
-            }
-
             if (message == "cheats") {
-                if (player.username != "emortaldev") {
-                    player.sendMessage("only hacks for emortal")
-                    return@listenOnly
-                }
                 player.gameMode = GameMode.CREATIVE
                 player.food = 20
-            }
-
-            if (message == "setup") {
-                val msg = MiniMessage.miniMessage().deserialize("Press <light_purple><key:key.advancements><reset> to view your achievements.")
-                player.sendMessage(msg)
-
-                Achievements.create(player)
-            }
-
-            if (message == "achieve") {
-                Achievement.BUDDY.send(player)
             }
 
             if (message == "eyes") {
@@ -235,155 +236,14 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
             }
 
             if (message == "rush") {
-                val entity = Entity(EntityType.ARMOR_STAND)
-                val meta = entity.entityMeta as ArmorStandMeta
-                meta.setNotifyAboutChanges(false)
-                //meta.radius = 0f
-                meta.isSmall = true
-                meta.isHasGlowingEffect = true
-                meta.isHasNoBasePlate = true
-                meta.isMarker = true
-                meta.isInvisible = true
-                meta.isCustomNameVisible = true
-                meta.customName = Component.text("\uF80D\uE012\uF80D")
-                meta.isHasNoGravity = true
-                meta.setNotifyAboutChanges(true)
-//            entity.addEffect(Potion(PotionEffect.INVISIBILITY, 1, Short.MAX_VALUE.toInt()))
-
-//                val playerRoom = rooms.first {
-//                    RoomBounds.isInside(it.schematic.bounds(it.position, it.direction), player.position)
-//                }
-
-//                val lights = playerRoom.lightBlocks
-//
-//                if (lights.isNotEmpty()) {
-//                    lateinit var task: Task
-//                    task = Manager.scheduler.buildTask(object : Runnable {
-//                        var lightBreakIndex = 0
-//                        var loopIndex = 0
-//
-//                        override fun run() {
-//                            val index = lightBreakIndex % lights.size
-//                            val light = lights[index]
-//                            val prevLight = lights[if (index == 0) lights.size - 1 else index]
-//
-//                            instance.setBlock(light.first, Block.AIR)
-//                            instance.setBlock(prevLight.first, prevLight.second)
-//
-//                            instance.playSound(Sound.sound(SoundEvent.ENTITY_EXPERIENCE_ORB_PICKUP, Sound.Source.MASTER, 1.5f, 2f), light.first)
-//
-//                            loopIndex++
-//                            lightBreakIndex++
-//
-//                            if (loopIndex > 6) {
-//                                task.cancel()
-//                            }
-//                        }
-//                    }).repeat(TaskSchedule.tick(5)).schedule()
-//                }
-
-                val paths = mutableListOf<List<Point>>()
-
-                val doorPoses = doorPositions.takeLast(maxLoadedRooms - 2)
-
-                doorPoses.forEachIndexed { i, it ->
-//                    println(it)
-
-                    if (i > 0) {
-                        val startPos = doorPoses[i - 1]
-
-                        val path = rushPathfinding.pathfind(startPos, it)
-                        if (path == null) {
-                            val dist = startPos.distance(it).toInt()
-                            val points = mutableListOf<Point>()
-
-                            repeat(dist) { ind ->
-                                points.add(startPos.lerp(it, ind.toDouble() / dist.toDouble()))
-                            }
-
-                            paths.add(points)
-                        } else {
-                            paths.add(path.reversed())
-                        }
-                    }
-                }
-
-                entity.setInstance(instance, doorPositions.first()).thenRun {
-                    val packet = EntitySoundEffectPacket(SoundEvent.ENTITY_ZOMBIE_DEATH.id(), Sound.Source.MASTER, entity.entityId, 100f, 1f)
-                    instance.sendGroupedPacket(packet)
-
-                    var doorIndex = 0
-
-                    var pathIndex = 0
-                    val roomsCopy = rooms.toMutableList()
-                    val startingRoom = (roomNum.get() - roomsCopy.size).coerceAtLeast(0)
-
-                    lateinit var task: Task
-                    task = entity.scheduler().buildTask {
-
-                        //val hasLineOfSight = RaycastUtil.raycastBlock(instance, entity.position, player.position.sub(entity.position).asVec().normalize(), 50.0)
-                        //meta.isCustomNameVisible = hasLineOfSight == null
-
-                        entity.teleport(paths[pathIndex].elementAt(doorIndex).asPos().add(0.5, 1.0, 0.5))
-
-//                        instance.showParticle(
-//                            Particle.particle(
-//                                type = ParticleType.LARGE_SMOKE,
-//                                count = 20,
-//                                data = OffsetAndSpeed(2.0f, 2.0f, 2.0f, 0.2f)
-//                            ),
-//                            entity.position.add(0.0, 1.0, 0.0).asVec()
-//                        )
-
-                        doorIndex += 2
-
-                        if (doorIndex >= paths[pathIndex].size) {
-                            doorIndex -= paths[pathIndex].size
-
-
-                            if (pathIndex + 1 < paths.size) {
-
-
-                                var lightBreakIndex = 0
-                                val room = roomsCopy[(pathIndex + 3).coerceIn(0, roomsCopy.size - 1)]
-                                val lights = room.lightBlocks
-
-                                if (lights.isNotEmpty()) {
-                                    lateinit var lightBreakTask: Task
-                                    lightBreakTask = Manager.scheduler.buildTask {
-                                        val rand = ThreadLocalRandom.current()
-
-                                        val light = lights[lightBreakIndex]
-                                        instance.setBlock(light.first, Block.AIR)
-                                        //player.sendMessage("Broke light")
-                                        instance.playSound(Sound.sound(SoundEvent.BLOCK_GLASS_BREAK, Sound.Source.MASTER, 3f, rand.nextFloat(0.5f, 0.8f)), light.first)
-
-                                        lightBreakIndex++
-                                        if (lightBreakIndex >= lights.size) {
-                                            lightBreakTask.cancel()
-                                            room.lightBlocks.clear()
-                                        }
-                                    }.repeat(TaskSchedule.tick(2)).schedule()
-                                }
-                            }
-
-                            pathIndex++
-                            player.sendMessage(pathIndex.toString())
-                        }
-                        if (pathIndex >= paths.size) {
-                            entity.remove()
-                            generateNextRoom(instance)
-                            task.cancel()
-                        }
-                    }.repeat(TaskSchedule.tick(1)).schedule()
-                }
+                spawnRush(instance)
             }
         }
 
         var bellHealth = 10
         eventNode.listenOnly<PlayerBlockInteractEvent> {
             if (block.compare(Block.BELL) && bellHealth > 0) {
-                instance.playSound(Sound.sound(SoundEvent.BLOCK_BELL_USE, Sound.Source.MASTER, bellHealth.toFloat() / 10f, 2f), blockPosition.add(0.5, 0.5, 0.5))
+                instance.playSound(Sound.sound(SoundEvent.BLOCK_BELL_USE, Sound.Source.MASTER, bellHealth.toFloat() / 10f, 2f), blockPosition)
                 instance.sendGroupedPacket(BlockActionPacket(blockPosition, 1, 2, block.stateId().toInt()))
 
                 bellHealth--
@@ -566,27 +426,155 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
         }
     }
 
-    override fun instanceCreate(): Instance {
-        val dim = Manager.dimensionType.getDimension(NamespaceID.from("nolight"))!!
-        val instance = Manager.instance.createInstanceContainer(dim)
-        instance.time = 18000
-        instance.timeRate = 0
-        instance.timeUpdate = null
+    fun spawnRush(instance: Instance) {
+        val entity = Entity(EntityType.ARMOR_STAND)
+        val meta = entity.entityMeta as ArmorStandMeta
+        meta.setNotifyAboutChanges(false)
+        //meta.radius = 0f
+        meta.isSmall = true
+        meta.isHasGlowingEffect = true
+        meta.isHasNoBasePlate = true
+        meta.isMarker = true
+        meta.isInvisible = true
+        meta.isCustomNameVisible = true
+        meta.customName = Component.text("\uF80D\uE012\uF80D")
+        meta.isHasNoGravity = true
+        meta.setNotifyAboutChanges(true)
 
-        val startingSchematic = SpongeSchematic()
-        startingSchematic.read(Path.of("startingroom.schem").inputStream())
+        val lights = rooms.last().lightBlocks.toMutableList()
 
-        instance.chunkLoader = SchematicChunkLoader.builder()
-            .addSchematic(startingSchematic)
-            .build()
+        if (lights.isNotEmpty()) {
+            lateinit var task: Task
+            task = Manager.scheduler.buildTask(object : Runnable {
+                var lightBreakIndex = 0
+                var loopIndex = 0
 
-        for (x in -3..3) {
-            for (z in -3..3) {
-                instance.loadChunk(x, z)
+                override fun run() {
+                    val index = lightBreakIndex % lights.size
+                    val light = lights[index]
+                    val prevLight = lights[if (index == 0) lights.size - 1 else index - 1]
+
+                    instance.setBlock(light.first, Block.AIR)
+                    instance.setBlock(prevLight.first, prevLight.second)
+
+                    instance.playSound(Sound.sound(SoundEvent.BLOCK_LEVER_CLICK, Sound.Source.MASTER, 1.5f, 2f), light.first)
+
+                    loopIndex++
+                    lightBreakIndex++
+
+                    if (loopIndex > 24) {
+                        task.cancel()
+                    }
+                }
+            }).repeat(TaskSchedule.tick(1)).schedule()
+        }
+
+        val paths = mutableListOf<List<Point>>()
+
+        val doorPoses = doorPositions.takeLast(maxLoadedRooms - 2)
+
+        doorPoses.forEachIndexed { i, it ->
+            if (i > 0) {
+                val startPos = doorPoses[i - 1]
+
+                val path = rushPathfinding.pathfind(startPos, it)
+                if (path == null) {
+                    val dist = startPos.distance(it).toInt()
+                    val points = mutableListOf<Point>()
+
+                    repeat(dist) { ind ->
+                        points.add(startPos.lerp(it, ind.toDouble() / dist.toDouble()))
+                    }
+
+                    paths.add(points)
+                } else {
+                    paths.add(path.reversed())
+                }
             }
         }
 
-        return instance
+        entity.setInstance(instance, doorPoses.first()).thenRun {
+            val packet = EntitySoundEffectPacket(SoundEvent.ENTITY_ZOMBIE_DEATH.id(), Sound.Source.MASTER, entity.entityId, 100f, 1f)
+            instance.sendGroupedPacket(packet)
+
+            var doorIndex = 0.0
+
+            var pathIndex = 0
+            val roomsCopy = rooms.toMutableList()
+
+            lateinit var task: Task
+            task = entity.scheduler().buildTask {
+                if (doorIndex % 1 == 0.0) {
+                    entity.teleport(paths[pathIndex][doorIndex.toInt()].asPos().add(0.5, 1.0, 0.5))
+
+                } else {
+                    val floored = floor(doorIndex).toInt()
+                    val prev = paths[pathIndex][floored]
+//                    val next = paths[pathIndex][(floored + 1).coerceAtMost(paths.size - 1)]
+//                    val pos = prev.lerp(next, doorIndex - floored).asPos()
+//                    entity.teleport(pos.add(0.5, 1.0, 0.5))
+                    entity.teleport(prev.asPos().add(0.5, 1.0, 0.5))
+                }
+
+
+//                        instance.showParticle(
+//                            Particle.particle(
+//                                type = ParticleType.LARGE_SMOKE,
+//                                count = 20,
+//                                data = OffsetAndSpeed(2.0f, 2.0f, 2.0f, 0.2f)
+//                            ),
+//                            entity.position.add(0.0, 1.0, 0.0).asVec()
+//                        )
+
+                doorIndex += 1.5
+
+                if (doorIndex >= paths[pathIndex].size) {
+                    doorIndex -= paths[pathIndex].size
+                    if (pathIndex + 1 < paths.size) {
+
+
+                        var lightBreakIndex = 0
+                        val room = roomsCopy[(pathIndex + 3).coerceIn(0, roomsCopy.size - 1)]
+                        val lights = room.lightBlocks
+
+                        if (lights.isNotEmpty()) {
+                            lateinit var lightBreakTask: Task
+                            lightBreakTask = Manager.scheduler.buildTask {
+                                val rand = ThreadLocalRandom.current()
+
+                                val light = lights[lightBreakIndex]
+                                instance.setBlock(light.first, Block.AIR)
+                                //player.sendMessage("Broke light")
+                                instance.playSound(Sound.sound(SoundEvent.BLOCK_GLASS_BREAK, Sound.Source.MASTER, 3f, rand.nextFloat(0.5f, 0.8f)), light.first)
+
+                                lightBreakIndex++
+                                if (lightBreakIndex >= lights.size) {
+                                    lightBreakTask.cancel()
+                                    room.lightBlocks.clear()
+                                }
+                            }.repeat(TaskSchedule.tick(2)).schedule()
+                        }
+                    }
+
+                    pathIndex++
+                }
+                if (pathIndex >= paths.size) {
+                    entity.remove()
+                    generateNextRoom(instance)
+                    task.cancel()
+                }
+            }.repeat(1, TimeUnit.SERVER_TICK).schedule()
+        }
+    }
+
+    override fun instanceCreate(): Instance {
+        val dim = Manager.dimensionType.getDimension(NamespaceID.from("nolight"))!!
+        val newInstance = Manager.instance.createInstanceContainer(dim)
+        newInstance.time = 18000
+        newInstance.timeRate = 0
+        newInstance.timeUpdate = null
+
+        return newInstance
     }
 
 
