@@ -102,7 +102,6 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
     var activeDoorDirection: Direction = Direction.NORTH
     var activeDoorPosition: Point = Vec(8.0, 0.0, -19.0)
 
-    val hidingTaskMap = ConcurrentHashMap<UUID, Task>()
     private lateinit var rushPathfinding: RushPathfinding
 
     val generatingRoom = AtomicBoolean(false)
@@ -276,85 +275,16 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
             else if (block.compare(Block.SPRUCE_TRAPDOOR)) {
                 this.isCancelled = true
                 this.isBlockingItemUse = true
+
+                val closet = Closet.getFromTrapdoor(block, blockPosition, instance) ?: return@listenOnly
+                closet.handleInteraction(player, blockPosition, block, instance)
             }
             else if (block.compare(Block.SPRUCE_DOOR)) {
                 this.isCancelled = true
                 this.isBlockingItemUse = true
 
-                val (doorDirection, rotatedDir, yOffset, newPos) = Closet.get(block, blockPosition)
-
-                fun stopHiding() {
-                    player.sendActionBar(Component.empty())
-
-                    player.removeTag(hidingTag)
-                    player.getAttribute(Attribute.MOVEMENT_SPEED).baseValue = 0.1f
-
-                    player.teleport(
-                        Pos(blockPosition.add(0.5, yOffset, 0.5)
-                            .add(doorDirection.offset())
-                            .let {
-                                if (block.getProperty("hinge") == "left") it.add(rotatedDir.normalX().toDouble() * 0.5, 0.0, rotatedDir.normalZ().toDouble() * 0.5)
-                                else it.sub(rotatedDir.normalX().toDouble() * 0.5, 0.0, rotatedDir.normalZ().toDouble() * 0.5)
-                            }
-                            , doorDirection.yaw(), 0f)
-                    )
-
-                    instance.setBlock(newPos, Block.AIR)
-
-                    hidingTaskMap[player.uuid]?.cancel()
-                    hidingTaskMap.remove(player.uuid)
-                }
-
-                if (player.hasTag(hidingTag)) {
-                    stopHiding()
-                } else if (instance.getBlock(newPos).compare(Block.STRUCTURE_VOID)) {
-                    player.sendActionBar(Component.text("There is already someone hiding there", NamedTextColor.RED))
-                } else {
-                    player.teleport(newPos)
-
-                    player.sendActionBar(
-                        Component.text("You are hidden - Right click to get out")
-                    )
-
-                    instance.setBlock(newPos, Block.STRUCTURE_VOID)
-                    player.getAttribute(Attribute.MOVEMENT_SPEED).baseValue = 0f
-                    player.setTag(hidingTag, true)
-
-                    hidingTaskMap[player.uuid] = player.scheduler().buildTask(object : Runnable {
-                        var iter = 0
-                        var mod = 25
-
-                        override fun run() {
-                            if (mod <= 0 || iter % mod == 0) {
-                                val titles = listOf("Get out", "get out", "Get out!", "Leave", "leave", "Leave!", "out", "Out", "Out!")
-
-                                player.showTitle(
-                                    Title.title(
-                                        Component.text(titles.random(), NamedTextColor.GRAY),
-                                        Component.empty(),
-                                        Title.Times.times(Duration.ofMillis(mod.coerceAtLeast(1) * 3L), Duration.ofMillis(50), Duration.ZERO)
-                                    )
-                                )
-                                player.playSound(Sound.sound(SoundEvent.BLOCK_FIRE_EXTINGUISH, Sound.Source.MASTER, 0.6f, 2f))
-
-                                mod -= 2
-                            }
-
-                            if (mod <= -15) {
-                                hidingTaskMap[player.uuid]?.cancel()
-                                hidingTaskMap.remove(player.uuid)
-
-                                Achievement.AND_STAY_OUT.send(player)
-
-                                player.damage(HideDamage(), 8f)
-
-                                stopHiding()
-                            }
-
-                            iter++
-                        }
-                    }).delay(Duration.ofSeconds(5)).repeat(TaskSchedule.tick(1)).schedule()
-                }
+                val closet = Closet.getFromDoor(block, blockPosition)
+                closet.handleInteraction(player, blockPosition, block, instance)
             }
         }
 
