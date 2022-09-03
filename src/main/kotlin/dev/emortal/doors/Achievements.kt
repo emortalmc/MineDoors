@@ -2,8 +2,6 @@ package dev.emortal.doors
 
 import dev.emortal.doors.game.Achievement
 import net.kyori.adventure.text.Component
-import net.kyori.adventure.text.format.NamedTextColor
-import net.minestom.server.advancements.Advancement
 import net.minestom.server.advancements.AdvancementRoot
 import net.minestom.server.advancements.FrameType
 import net.minestom.server.entity.Player
@@ -42,11 +40,11 @@ object Achievements {
         val deathTen = Achievement.DEATH_TEN.asAdvancement()
         val deathHundred = Achievement.DEATH_HUNDRED.asAdvancement()
 
-        tab.createAdvancement("buddysystem", buddy, root)
+        tab.createAdvancement("buddy_system", buddy, root)
 
-        tab.createAdvancement("deathone", deathOne, root)
-        tab.createAdvancement("deathten", deathTen, deathOne)
-        tab.createAdvancement("deathhundred", deathHundred, deathTen)
+        tab.createAdvancement("death_one", deathOne, root)
+        tab.createAdvancement("death_ten", deathTen, deathOne)
+        tab.createAdvancement("death_hundred", deathHundred, deathTen)
 
         tab.createAdvancement("rush", rush, root)
         tab.createAdvancement("screech", screech, rush)
