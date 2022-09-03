@@ -5,9 +5,10 @@ import dev.emortal.doors.block.SignHandler
 import dev.emortal.doors.block.SingleChestHandler
 import dev.emortal.doors.doorSchem
 import dev.emortal.doors.game.DoorsGame.Companion.applyDoor
-import dev.emortal.doors.game.RoomBounds.Companion.isOverlapping
+import dev.emortal.doors.util.RoomBounds.Companion.isOverlapping
 import dev.emortal.doors.pathfinding.offset
 import dev.emortal.doors.schematics
+import dev.emortal.doors.util.RoomBounds
 import dev.hypera.scaffolding.region.Region
 import dev.hypera.scaffolding.schematic.impl.SpongeSchematic
 import net.kyori.adventure.text.Component

@@ -3,7 +3,7 @@ package dev.emortal.doors
 import com.sun.tools.javac.Main
 import dev.emortal.doors.block.SignHandler
 import dev.emortal.doors.game.DoorsGame
-import dev.emortal.doors.game.DoorsLobby
+import dev.emortal.doors.lobby.DoorsLobby
 import dev.emortal.doors.pathfinding.rotate
 import dev.emortal.immortal.ImmortalExtension
 import dev.emortal.immortal.config.GameOptions
