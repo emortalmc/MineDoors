@@ -17,10 +17,11 @@ repositories {
 }
 
 dependencies {
-    implementation("com.github.iam4722202468", "Minestom", "b7e312c6a3")
+    implementation("com.github.EmortalMC", "Minestom", "0657315f62")
+//    implementation("com.github.Minestom", "Minestom", "fc90fe8852")
 
-//    api("com.github.EmortalMC:KStom:50b2b882fa")
-//    api("com.github.emortaldev:Particable:fadfbe0213")
+    api("com.github.EmortalMC:KStom:50b2b882fa")
+    api("com.github.emortaldev:Particable:fadfbe0213")
 
     implementation("com.github.EmortalMC:Immortal:ba273bb925")
 

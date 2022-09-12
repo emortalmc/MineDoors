@@ -169,7 +169,7 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
 
     val number = game.roomNum.incrementAndGet()
 
-    fun applyRoom(schemList: Collection<SpongeSchematic> = schematics): CompletableFuture<Void>? {
+    fun applyRoom(schemList: Collection<SpongeSchematic> = schematics.toMutableList()): CompletableFuture<Void>? {
         val randomSchem = schemList.shuffled().firstOrNull { schem ->
             val bounds = schem.bounds(position, direction)
             val doors = schem.doors(position, direction)
@@ -322,6 +322,10 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
         )
 
         schematic = randomSchem
+
+        game.players.forEach {
+            it.respawnPoint = position.asPos()
+        }
 
         val future = CompletableFuture<Void>()
         removalBatch = batch.apply(instance) {

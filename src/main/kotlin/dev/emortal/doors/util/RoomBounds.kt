@@ -66,6 +66,8 @@ data class RoomBounds(val topLeft: Point, val bottomRight: Point) {
 
             val thisRect = Rectangle(firstMinX, firstMinZ, sizeX, sizeZ)
             val otherRect = Rectangle(otherMinX, otherMinZ, otherSizeX, otherSizeZ)
+            thisRect.grow(-1, -1)
+            otherRect.grow(-1, -1)
 
             return thisRect.intersects(otherRect)
         }

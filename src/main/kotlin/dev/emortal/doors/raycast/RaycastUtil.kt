@@ -10,6 +10,7 @@ import net.minestom.server.coordinate.Pos
 import net.minestom.server.coordinate.Vec
 import net.minestom.server.entity.Entity
 import net.minestom.server.instance.Instance
+import net.minestom.server.instance.block.Block
 import world.cepi.kstom.util.component1
 import world.cepi.kstom.util.component2
 import world.cepi.kstom.util.component3
@@ -18,6 +19,12 @@ object RaycastUtil {
 
     private val boundingBoxToArea3dMap = HashMap<BoundingBox, Area3d>()
     private const val tolerance: Double = 0.1
+
+    private val blockBlacklist = setOf(
+        Block.IRON_DOOR,
+        Block.OAK_DOOR,
+        Block.SPRUCE_DOOR,
+    )
 
 
     init {

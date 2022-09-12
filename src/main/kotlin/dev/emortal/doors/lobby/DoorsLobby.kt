@@ -4,6 +4,10 @@ import dev.emortal.doors.lobby.Elevator.Companion.elevatorTag
 import dev.emortal.doors.util.RoomBounds
 import dev.emortal.immortal.config.GameOptions
 import dev.emortal.immortal.game.LobbyGame
+import net.kyori.adventure.key.Key
+import net.kyori.adventure.sound.Sound
+import net.kyori.adventure.text.Component
+import net.kyori.adventure.title.Title
 import net.minestom.server.coordinate.Point
 import net.minestom.server.coordinate.Pos
 import net.minestom.server.entity.Player
@@ -13,6 +17,9 @@ import net.minestom.server.instance.AnvilLoader
 import net.minestom.server.instance.Instance
 import world.cepi.kstom.Manager
 import world.cepi.kstom.event.listenOnly
+import java.time.Duration
+import java.util.concurrent.Executors
+
 
 class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
 
@@ -32,8 +39,9 @@ class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
 
     }
 
-    val leftElevators = leftDoors.mapIndexed { i, it -> Elevator(instance.get()!!, it, RoomBounds(it.add(4.0, 0.0, -2.0), it.add(0.0, 0.0, 2.0)), i) }
-    val rightElevators = rightDoors.mapIndexed { i, it -> Elevator(instance.get()!!, it, RoomBounds(it.add(-3.0, 0.0, -2.0), it.add(0.0, 0.0, 2.0)), i + 5) }
+    val executor = Executors.newScheduledThreadPool(1)
+    val leftElevators = leftDoors.mapIndexed { i, it -> Elevator(this, instance.get()!!, it, RoomBounds(it.add(4.0, 0.0, -2.0), it.add(0.0, 0.0, 2.0)), i) }
+    val rightElevators = rightDoors.mapIndexed { i, it -> Elevator(this, instance.get()!!, it, RoomBounds(it.add(-3.0, 0.0, -2.0), it.add(0.0, 0.0, 2.0)), i + 5) }
 
     override fun gameDestroyed() {
 
@@ -45,6 +53,39 @@ class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
 
 
     override fun playerJoin(player: Player) {
+
+        Manager.scheduler.buildTask {
+            player.playSound(Sound.sound(Key.key("entity.rush.jumpscare"), Sound.Source.MASTER, 0.8f, 1f))
+            player.showTitle(
+                Title.title(
+                    Component.text("\uE01A"),
+                    Component.empty(),
+                    Title.Times.times(Duration.ZERO, Duration.ofSeconds(1), Duration.ZERO)
+                )
+            )
+        }.delay(Duration.ofSeconds(3)).schedule()
+        Manager.scheduler.buildTask {
+            player.playSound(Sound.sound(Key.key("entity.rush.jumpscare"), Sound.Source.MASTER, 0.8f, 1.2f))
+            player.showTitle(
+                Title.title(
+                    Component.text("\uE01B"),
+                    Component.empty(),
+                    Title.Times.times(Duration.ZERO, Duration.ofSeconds(1), Duration.ZERO)
+                )
+            )
+        }.delay(Duration.ofSeconds(4)).schedule()
+        Manager.scheduler.buildTask {
+            player.playSound(Sound.sound(Key.key("entity.rush.jumpscare"), Sound.Source.MASTER, 0.8f, 1.4f))
+
+            player.showTitle(
+                Title.title(
+                    Component.text("\uE01C"),
+                    Component.empty(),
+                    Title.Times.times(Duration.ZERO, Duration.ofSeconds(1), Duration.ZERO)
+                )
+            )
+        }.delay(Duration.ofSeconds(5)).schedule()
+
     }
 
     override fun playerLeave(player: Player) {
@@ -94,10 +135,12 @@ class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
     }
 
     override fun instanceCreate(): Instance {
+//        val dim = Manager.dimensionType.getDimension(NamespaceID.from("fullbrighttt"))!!
         val instance = Manager.instance.createInstanceContainer()
         instance.time = 18000
         instance.timeRate = 0
         instance.timeUpdate = null
+        instance.setHasLighting(false)
 
         instance.chunkLoader = AnvilLoader("./roomslobby/")
 

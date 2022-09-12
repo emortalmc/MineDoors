@@ -3,11 +3,15 @@ package dev.emortal.doors.game
 import dev.emortal.doors.Achievements
 import dev.emortal.doors.applyRotationToBlock
 import dev.emortal.doors.block.SingleChestHandler
+import dev.emortal.doors.damage.DoorsEntity
+import dev.emortal.doors.damage.EyesDamage
 import dev.emortal.doors.damage.HideDamage
+import dev.emortal.doors.damage.RushDamage
 import dev.emortal.doors.pathfinding.RushPathfinding
 import dev.emortal.doors.pathfinding.offset
-import dev.emortal.doors.pathfinding.yaw
+import dev.emortal.doors.raycast.RaycastUtil
 import dev.emortal.doors.relight
+import dev.emortal.doors.util.ExecutorRunnable
 import dev.emortal.doors.util.MultilineHologramAEC
 import dev.emortal.doors.util.lerp
 import dev.emortal.immortal.config.GameOptions
@@ -18,6 +22,7 @@ import net.kyori.adventure.sound.Sound
 import net.kyori.adventure.sound.SoundStop
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
+import net.kyori.adventure.text.format.TextColor
 import net.kyori.adventure.text.minimessage.MiniMessage
 import net.kyori.adventure.title.Title
 import net.minestom.server.attribute.Attribute
@@ -28,7 +33,9 @@ import net.minestom.server.entity.Entity
 import net.minestom.server.entity.EntityType
 import net.minestom.server.entity.GameMode
 import net.minestom.server.entity.Player
+import net.minestom.server.entity.metadata.other.AreaEffectCloudMeta
 import net.minestom.server.entity.metadata.other.ArmorStandMeta
+import net.minestom.server.event.entity.EntityDamageEvent
 import net.minestom.server.event.player.PlayerBlockInteractEvent
 import net.minestom.server.event.player.PlayerChatEvent
 import net.minestom.server.event.player.PlayerMoveEvent
@@ -42,21 +49,21 @@ import net.minestom.server.potion.Potion
 import net.minestom.server.potion.PotionEffect
 import net.minestom.server.sound.SoundEvent
 import net.minestom.server.tag.Tag
-import net.minestom.server.timer.Task
-import net.minestom.server.timer.TaskSchedule
 import net.minestom.server.utils.Direction
 import net.minestom.server.utils.NamespaceID
 import net.minestom.server.utils.time.TimeUnit
 import world.cepi.kstom.Manager
 import world.cepi.kstom.event.listenOnly
 import world.cepi.kstom.util.asPos
-import world.cepi.kstom.util.playSound
+import world.cepi.particle.Particle
+import world.cepi.particle.ParticleType
+import world.cepi.particle.data.OffsetAndSpeed
+import world.cepi.particle.showParticle
 import java.nio.file.Path
 import java.time.Duration
-import java.util.*
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -104,16 +111,51 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
     private lateinit var rushPathfinding: RushPathfinding
 
-    val generatingRoom = AtomicBoolean(false)
+    private val generatingRoom = AtomicBoolean(false)
 
-    private var doorOpenSecondsLeft: Int = 30
-    private var doorTimerHologram = MultilineHologramAEC(mutableListOf(Component.text(doorOpenSecondsLeft, NamedTextColor.GOLD)))
-    private var doorTask: Task? = null
+    private var doorOpenSecondsLeft = AtomicInteger(30)
+    private var doorTimerHologram = MultilineHologramAEC(mutableListOf(Component.text(doorOpenSecondsLeft.get(), NamedTextColor.GOLD)))
+    private var doorTask: ExecutorRunnable? = null
+
+    val executor = Executors.newScheduledThreadPool(1)
 
     override fun gameStarted() {
         val instance = instance.get() ?: return
 
         rushPathfinding = RushPathfinding(instance)
+
+        doorTimerHologram.setInstance(Pos(0.5, 0.5, -0.8), instance)
+
+        doorTask = object : ExecutorRunnable(repeat = Duration.ofSeconds(1), executor = executor, iterations = 31) {
+            override fun run() {
+                val doorSecondsLeft = doorOpenSecondsLeft.get()
+
+                doorTimerHologram.setLine(0, Component.text(doorSecondsLeft, NamedTextColor.GOLD))
+
+                if (doorSecondsLeft == 5) {
+                    instance.setBlock(1, 1, -1, Block.POLISHED_BLACKSTONE_BUTTON.withProperties(mapOf("powered" to "true", "facing" to "south")))
+                }
+
+                if (doorSecondsLeft <= 0) {
+                    instance.setBlock(0, 0, -2, Block.IRON_DOOR.withProperties(mapOf("facing" to "north", "half" to "lower", "open" to "true")))
+                    instance.setBlock(0, 1, -2, Block.IRON_DOOR.withProperties(mapOf("facing" to "north", "half" to "upper", "open" to "true")))
+
+                    instance.playSound(Sound.sound(SoundEvent.BLOCK_IRON_DOOR_OPEN, Sound.Source.MASTER, 1f, 1f), Pos(0.5, 0.5, -2.0))
+
+                    players.forEach {
+                        it.food = 0
+                        it.foodSaturation = 0f
+                        it.addEffect(Potion(PotionEffect.JUMP_BOOST, 200.toByte(), Short.MAX_VALUE.toInt()))
+                    }
+
+                    doorTimerHologram.remove()
+                    doorTask?.cancel()
+                    doorTask = null
+                }
+
+                doorOpenSecondsLeft.decrementAndGet()
+            }
+        }
 
         val startingSchematic = SpongeSchematic()
         startingSchematic.read(Path.of("startingroom.schem").inputStream())
@@ -129,28 +171,11 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
         CompletableFuture.allOf(*futures.toTypedArray()).join()
         lobbyRoom.applyRoom(listOf(startingSchematic))
+        rooms.add(lobbyRoom)
 
         instance.scheduler().buildTask {
             instance.relight(spawnPosition)
         }.delay(30, TimeUnit.SERVER_TICK).schedule()
-
-        doorTimerHologram.setInstance(Pos(0.5, 0.5, -0.8), instance)
-        doorTask = instance.scheduler().buildTask {
-            doorTimerHologram.setLine(0, Component.text(doorOpenSecondsLeft, NamedTextColor.GOLD))
-
-            if (doorOpenSecondsLeft <= 0) {
-                instance.setBlock(0, 0, -2, Block.IRON_DOOR.withProperties(mapOf("facing" to "north", "half" to "lower", "open" to "true")))
-                instance.setBlock(0, 1, -2, Block.IRON_DOOR.withProperties(mapOf("facing" to "north", "half" to "upper", "open" to "true")))
-
-                instance.playSound(Sound.sound(SoundEvent.BLOCK_IRON_DOOR_OPEN, Sound.Source.MASTER, 1f, 1f), Pos(0.5, 0.5, -2.0))
-
-                doorTimerHologram.remove()
-                doorTask?.cancel()
-                doorTask = null
-            }
-
-            doorOpenSecondsLeft--
-        }.repeat(20, TimeUnit.SERVER_TICK).schedule()
 
     }
 
@@ -168,6 +193,8 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
         player.food = 0
         player.foodSaturation = 0f
         player.addEffect(Potion(PotionEffect.JUMP_BOOST, 200.toByte(), Short.MAX_VALUE.toInt()))
+
+//        player.addEffect(Potion(PotionEffect.NIGHT_VISION, 1.toByte(), Short.MAX_VALUE.toInt()))
 
         // Ambiance
         player.scheduler().buildTask {
@@ -187,55 +214,104 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
     }
 
     override fun playerLeave(player: Player) {
+        Achievements.remove(player)
     }
 
     override fun registerEvents() {
         eventNode.listenOnly<PlayerMoveEvent> {
+            val closestPlayerToDoor = players.minBy { it.position.distanceSquared(activeDoorPosition) }
+
+            if (closestPlayerToDoor.uuid == player.uuid) return@listenOnly
+
+            val distanceToPlayer = closestPlayerToDoor.getDistanceSquared(player)
+
+            player.getAttribute(Attribute.MOVEMENT_SPEED).baseValue = 0.1f + if (distanceToPlayer > 25*25) 0.2f else 0f
+
             if (player.hasTag(hidingTag)) {
                 isCancelled = true
             }
         }
 
         eventNode.listenOnly<PlayerChatEvent> {
-            if (message == "cheats") {
-                player.gameMode = GameMode.CREATIVE
-                player.food = 20
-            }
+//            if (message == "cheats") {
+//                player.gameMode = GameMode.CREATIVE
+//                player.food = 20
+//            }
 
-            if (message == "eyes") {
-                val entity = Entity(EntityType.ARMOR_STAND)
-                val meta = entity.entityMeta as ArmorStandMeta
-                meta.setNotifyAboutChanges(false)
-                //meta.radius = 0f
-                meta.isSmall = true
-                meta.isHasGlowingEffect = true
-                meta.isHasNoBasePlate = true
-                meta.isMarker = true
-                meta.isInvisible = true
+            if (message == "eyessss") {
+                val entity = Entity(EntityType.AREA_EFFECT_CLOUD)
+                val meta = entity.entityMeta as AreaEffectCloudMeta
+//                meta.setNotifyAboutChanges(false)
+                meta.radius = 0f
+//                meta.isSmall = true
+//                meta.isHasGlowingEffect = true
+//                meta.isHasNoBasePlate = true
+//                meta.isMarker = true
+//                meta.isInvisible = true
                 meta.isCustomNameVisible = true
                 meta.customName = Component.text("\uF80D\uE013\uF80D")
                 meta.isHasNoGravity = true
                 meta.setNotifyAboutChanges(true)
 
-                entity.setInstance(instance, player.position.withY(1.0))
-                instance.setBlock(player.position.withY(1.0), Block.LIGHT)
+                val roomNumberOnSpawn = roomNum.get()
 
-//            entity.scheduler().buildTask {
-//                val distanceToEye = player.position.distance(entity.position)
-//                val raycast = RaycastUtil.raycast(instance, player.position, player.position.sub(entity.position).asVec().normalize(), maxDistance = 60.0) { it != player }
-//
-//                println(raycast)
-//
-//                if (raycast.resultType == RaycastResultType.HIT_BLOCK) {
-//                    println(instance.getBlock(raycast.hitPosition!!))
-//                }
-//
-//                //meta.isCustomNameVisible = raycast == null
-//            }.repeat(TaskSchedule.tick(1)).schedule()
+                val originalPosition = player.position.add(0.0, 0.5, 0.0)
+
+                entity.setInstance(instance, originalPosition)
+                instance.setBlock(originalPosition, Block.LIGHT)
+
+                instance.playSound(Sound.sound(Key.key("entity.eyes.initiate"), Sound.Source.MASTER, 1f, 1f), originalPosition)
+
+                entity.scheduler().buildTask {
+                    instance.playSound(Sound.sound(Key.key("entity.eyes.ambiance"), Sound.Source.MASTER, 1f, 1f), originalPosition)
+                }.repeat(110, TimeUnit.SERVER_TICK).schedule()
+
+                entity.scheduler().buildTask {
+
+                    if (roomNumberOnSpawn != roomNum.get()) {
+                        instance.stopSound(SoundStop.named(Key.key("entity.eyes.ambiance")))
+                        instance.stopSound(SoundStop.named(Key.key("entity.eyes.initiate")))
+                        entity.remove()
+                    }
+
+                    val random = ThreadLocalRandom.current()
+                    val jitter = 0.03
+
+                    entity.teleport(originalPosition.add(random.nextDouble(-jitter, jitter), random.nextDouble(-jitter, jitter), random.nextDouble(-jitter, jitter)))
+
+                    val playerPos = player.position.add(0.0, 1.6, 0.0)
+                    val distanceToEye = playerPos.distance(originalPosition)
+                    val directionToEye = playerPos.sub(originalPosition).asVec().normalize()
+                    val raycast = RaycastUtil.raycastBlock(instance, entity.position, directionToEye, maxDistance = distanceToEye)
+
+                    players.forEach {
+                        if (it.gameMode != GameMode.ADVENTURE) return@forEach
+
+                        val dir = Pos.ZERO.withDirection(originalPosition.add(0.0, 1.0, 0.0).sub(playerPos).asVec().normalize())
+                        val yawDiff = dir.yaw - it.position.yaw
+                        val pitchDiff = dir.pitch - it.position.pitch
+
+                        //it.sendMessage("yaw: ${yawDiff}, pitch: ${pitchDiff}")
+
+                        if (yawDiff > -70 && yawDiff < 70 && pitchDiff > -55 && pitchDiff < 46) {
+                            if (it.aliveTicks % 4L == 0L) {
+                                it.playSound(Sound.sound(Key.key("entity.eyes.attack"), Sound.Source.MASTER, 1f, 1f))
+                                it.damage(EyesDamage(entity), 2f)
+                            }
+                        }
+                    }
+
+                    if (raycast != null) {
+                        player.sendMessage(instance.getBlock(raycast).name())
+                    }
+
+                    meta.isCustomNameVisible = raycast == null
+                }.repeat(1, TimeUnit.SERVER_TICK).schedule()
             }
 
-            if (message == "rush") {
+            if (message == "rushhhh") {
                 spawnRush(instance)
+                isCancelled = true
             }
         }
 
@@ -255,8 +331,8 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
                 instance.setBlock(blockPosition, block.withProperty("powered", "true"))
 
-                doorOpenSecondsLeft = 5
-                doorTimerHologram.setLine(0, Component.text(doorOpenSecondsLeft, NamedTextColor.GOLD))
+                doorOpenSecondsLeft.set(5)
+                doorTimerHologram.setLine(0, Component.text(5, NamedTextColor.GOLD))
 
                 return@listenOnly
             }
@@ -268,36 +344,110 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
                 instance.playSound(
                     Sound.sound(SoundEvent.BLOCK_CHEST_OPEN, Sound.Source.BLOCK, 1f, 1f),
-                    blockPosition.add(0.5, 0.5, 0.5)
+                    blockPosition.add(0.5)
                 )
             }
 
-            else if (block.compare(Block.SPRUCE_TRAPDOOR)) {
-                this.isCancelled = true
-                this.isBlockingItemUse = true
-
-                val closet = Closet.getFromTrapdoor(block, blockPosition, instance) ?: return@listenOnly
-                closet.handleInteraction(player, blockPosition, block, instance)
-            }
             else if (block.compare(Block.SPRUCE_DOOR)) {
                 this.isCancelled = true
                 this.isBlockingItemUse = true
 
-                val closet = Closet.getFromDoor(block, blockPosition)
+                val closet = Closet.getFromDoor(this@DoorsGame, block, blockPosition)
                 closet.handleInteraction(player, blockPosition, block, instance)
+            }
+
+            else if (block.compare(Block.OAK_DOOR)) {
+
+            }
+
+            else {
+                isCancelled = true
+                isBlockingItemUse = true
+            }
+        }
+
+        eventNode.listenOnly<EntityDamageEvent> {
+            val player = entity as? Player ?: return@listenOnly
+            if (player.gameMode != GameMode.ADVENTURE) return@listenOnly
+
+            // If the player would die from this damage
+            if (player.health - damage <= 0f) {
+                isCancelled = true // save them :sunglassses:
+
+                val doorsEntity = when (damageType) {
+                    is EyesDamage -> DoorsEntity.EYES
+                    is HideDamage -> DoorsEntity.HIDE
+                    is RushDamage -> DoorsEntity.RUSH
+                    else -> return@listenOnly
+                }
+
+                kill(player, doorsEntity) // jk
             }
         }
 
         eventNode.listenOnly<PlayerMoveEvent> {
             if (activeDoorPosition == Vec.ZERO) return@listenOnly
+            if (player.gameMode != GameMode.ADVENTURE) return@listenOnly
             if (generatingRoom.get()) {
                 //player.sendMessage("ALREADY GENERATING!!!!")
                 return@listenOnly
             }
             val distanceToDoor = player.position.distanceSquared(activeDoorPosition)
 
-            if (distanceToDoor < 4.2 * 4.2) {
+            if (distanceToDoor < 3.8 * 3.8) {
                 generateNextRoom(instance)
+            }
+        }
+    }
+
+    private fun kill(player: Player, killer: DoorsEntity) {
+//        sendMessage(
+//            Component.text("")
+//        )
+
+        player.gameMode = GameMode.SPECTATOR
+
+        player.playSound(Sound.sound(Key.key("custom.death"), Sound.Source.MASTER, 0.6f, 1f), Sound.Emitter.self())
+        player.sendActionBar(Component.text("\uE00A"))
+
+        player.showTitle(
+            Title.title(
+                Component.text("\uE019", TextColor.color(255, 200, 200)),
+                Component.empty(),
+                Title.Times.times(Duration.ofMillis(0), Duration.ofMillis(1500), Duration.ofMillis(500))
+            )
+        )
+
+        val bgCharacters = listOf('\uE015', '\uE016', '\uE017', '\uE018')
+
+        val messages = listOf(killer.messages.first().first) + killer.messages.first().second.split(". ").map { if (it.endsWith(".")) it else "${it}." }
+
+        object : ExecutorRunnable(delay = Duration.ofSeconds(2), repeat = Duration.ofMillis(50), iterations = 20 * 4 * messages.size, executor = executor) {
+
+            override fun run() {
+                val currentIter = currentIteration.get()
+
+                if (currentIter == 0) {
+                    player.playSound(Sound.sound(Key.key("music.guidinglight"), Sound.Source.MASTER, 0.6f, 1f), Sound.Emitter.self())
+                }
+                if (currentIter % 80 == 0) {
+                    val currentMessage = messages[(currentIter.toDouble() / 80.0).toInt()]
+
+                    player.showTitle(
+                        Title.title(
+                            Component.empty(),
+                            Component.text(currentMessage, TextColor.color(183, 245, 245)),
+                            Title.Times.times(Duration.ofMillis(300), Duration.ofMillis(3400), Duration.ofMillis(300))
+                        )
+                    )
+                }
+
+                player.sendActionBar(Component.text(bgCharacters[currentIter % bgCharacters.size]))
+            }
+
+            override fun cancelled() {
+                player.stopSound(SoundStop.named(Key.key("music.guidinglight")))
+                player.playSound(Sound.sound(Key.key("music.guidinglight.ending"), Sound.Source.MASTER, 0.6f, 1f), Sound.Emitter.self())
             }
         }
     }
@@ -374,8 +524,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
         val lights = rooms.last().lightBlocks.toMutableList()
 
         if (lights.isNotEmpty()) {
-            lateinit var task: Task
-            task = Manager.scheduler.buildTask(object : Runnable {
+            object : ExecutorRunnable(repeat = Duration.ofMillis(150), iterations = 12, executor = executor) {
                 var lightBreakIndex = 0
                 var loopIndex = 0
 
@@ -387,16 +536,12 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                     instance.setBlock(light.first, Block.AIR)
                     instance.setBlock(prevLight.first, prevLight.second)
 
-                    instance.playSound(Sound.sound(SoundEvent.BLOCK_LEVER_CLICK, Sound.Source.MASTER, 1.5f, 2f), light.first)
+                    instance.playSound(Sound.sound(Key.key("custom.light.zap"), Sound.Source.MASTER, 2f, 1f), light.first)
 
                     loopIndex++
                     lightBreakIndex++
-
-                    if (loopIndex > 24) {
-                        task.cancel()
-                    }
                 }
-            }).repeat(TaskSchedule.tick(1)).schedule()
+            }
         }
 
         val paths = mutableListOf<List<Point>>()
@@ -424,7 +569,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
         }
 
         entity.setInstance(instance, doorPoses.first()).thenRun {
-            val packet = EntitySoundEffectPacket(SoundEvent.ENTITY_ZOMBIE_DEATH.id(), Sound.Source.MASTER, entity.entityId, 100f, 1f)
+            val packet = EntitySoundEffectPacket(SoundEvent.ENTITY_ZOMBIE_DEATH.id(), Sound.Source.MASTER, entity.entityId, 100f, 1f, 0)
             instance.sendGroupedPacket(packet)
 
             var doorIndex = 0.0
@@ -432,73 +577,80 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
             var pathIndex = 0
             val roomsCopy = rooms.toMutableList()
 
-            lateinit var task: Task
-            task = entity.scheduler().buildTask {
-                if (doorIndex % 1 == 0.0) {
-                    entity.teleport(paths[pathIndex][doorIndex.toInt()].asPos().add(0.5, 1.0, 0.5))
+            object : ExecutorRunnable(repeat = Duration.ofMillis(50), executor = executor) {
+                override fun run() {
+                    if (doorIndex % 1 == 0.0) {
+                        entity.teleport(paths[pathIndex][doorIndex.toInt()].asPos().add(0.5, 1.0, 0.5))
 
-                } else {
-                    val floored = floor(doorIndex).toInt()
-                    val prev = paths[pathIndex][floored]
+                    } else {
+                        val floored = floor(doorIndex).toInt()
+                        val prev = paths[pathIndex][floored]
 //                    val next = paths[pathIndex][(floored + 1).coerceAtMost(paths.size - 1)]
 //                    val pos = prev.lerp(next, doorIndex - floored).asPos()
 //                    entity.teleport(pos.add(0.5, 1.0, 0.5))
-                    entity.teleport(prev.asPos().add(0.5, 1.0, 0.5))
-                }
-
-
-//                        instance.showParticle(
-//                            Particle.particle(
-//                                type = ParticleType.LARGE_SMOKE,
-//                                count = 20,
-//                                data = OffsetAndSpeed(2.0f, 2.0f, 2.0f, 0.2f)
-//                            ),
-//                            entity.position.add(0.0, 1.0, 0.0).asVec()
-//                        )
-
-                doorIndex += 1.5
-
-                if (doorIndex >= paths[pathIndex].size) {
-                    doorIndex -= paths[pathIndex].size
-                    if (pathIndex + 1 < paths.size) {
-
-
-                        var lightBreakIndex = 0
-                        val room = roomsCopy[(pathIndex + 3).coerceIn(0, roomsCopy.size - 1)]
-                        val lights = room.lightBlocks
-
-                        if (lights.isNotEmpty()) {
-                            lateinit var lightBreakTask: Task
-                            lightBreakTask = Manager.scheduler.buildTask {
-                                val rand = ThreadLocalRandom.current()
-
-                                val light = lights[lightBreakIndex]
-                                instance.setBlock(light.first, Block.AIR)
-                                //player.sendMessage("Broke light")
-                                instance.playSound(Sound.sound(SoundEvent.BLOCK_GLASS_BREAK, Sound.Source.MASTER, 3f, rand.nextFloat(0.5f, 0.8f)), light.first)
-
-                                lightBreakIndex++
-                                if (lightBreakIndex >= lights.size) {
-                                    lightBreakTask.cancel()
-                                    room.lightBlocks.clear()
-                                }
-                            }.repeat(TaskSchedule.tick(2)).schedule()
-                        }
+                        entity.teleport(prev.asPos().add(0.5, 1.0, 0.5))
                     }
 
-                    pathIndex++
+
+                    instance.showParticle(
+                        Particle.particle(
+                            type = ParticleType.LARGE_SMOKE,
+                            count = 20,
+                            data = OffsetAndSpeed(2.0f, 2.0f, 2.0f, 0.2f)
+                        ),
+                        entity.position.add(0.0, 1.0, 0.0).asVec()
+                    )
+
+                    doorIndex += 1
+
+                    if (doorIndex >= paths[pathIndex].size) {
+                        doorIndex -= paths[pathIndex].size
+                        if (pathIndex + 1 < paths.size) {
+
+                            var lightBreakIndex = 0
+                            val room = roomsCopy[(pathIndex + 3).coerceIn(0, roomsCopy.size - 1)]
+                            val lights = room.lightBlocks
+
+                            if (lights.isNotEmpty()) {
+                                lights.iterator().forEachRemaining {
+                                    instance.setBlock(it.first, Block.AIR)
+                                    if (it.second.compare(Block.LIGHT)) lights.remove(it)
+                                }
+
+                                object : ExecutorRunnable(repeat = Duration.ofMillis(100), executor = executor) {
+                                    override fun run() {
+                                        if (lightBreakIndex >= lights.size) return
+
+                                        val light = lights[lightBreakIndex]
+
+                                        //player.sendMessage("Broke light")
+                                        instance.playSound(Sound.sound(Key.key("custom.light.break"), Sound.Source.MASTER, 0.5f, 1f), light.first)
+
+                                        lightBreakIndex++
+                                        if (lightBreakIndex >= lights.size) {
+                                            cancel()
+                                            room.lightBlocks.clear()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        pathIndex++
+                    }
+                    if (pathIndex >= paths.size) {
+                        entity.remove()
+                        generateNextRoom(instance)
+                        cancel()
+                    }
                 }
-                if (pathIndex >= paths.size) {
-                    entity.remove()
-                    generateNextRoom(instance)
-                    task.cancel()
-                }
-            }.repeat(1, TimeUnit.SERVER_TICK).schedule()
+            }
         }
     }
 
     override fun instanceCreate(): Instance {
-        val dim = Manager.dimensionType.getDimension(NamespaceID.from("nolight"))!!
+//        val dim = Manager.dimensionType.getDimension(NamespaceID.from("nolight"))!!
+        val dim = Manager.dimensionType.getDimension(NamespaceID.from("fullbrighttt"))!!
         val newInstance = Manager.instance.createInstanceContainer(dim)
         newInstance.time = 18000
         newInstance.timeRate = 0

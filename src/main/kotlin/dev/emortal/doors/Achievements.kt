@@ -3,12 +3,17 @@ package dev.emortal.doors
 import dev.emortal.doors.game.Achievement
 import net.kyori.adventure.text.Component
 import net.minestom.server.advancements.AdvancementRoot
+import net.minestom.server.advancements.AdvancementTab
 import net.minestom.server.advancements.FrameType
 import net.minestom.server.entity.Player
 import net.minestom.server.item.Material
 import world.cepi.kstom.Manager
+import java.util.*
+import java.util.concurrent.ConcurrentHashMap
 
 object Achievements {
+
+    private val tabMap = ConcurrentHashMap<UUID, AdvancementTab>()
 
     fun create(player: Player) {
 
@@ -54,8 +59,13 @@ object Achievements {
 
         tab.addViewer(player)
 
+        tabMap[player.uuid] = tab
 
+    }
 
+    fun remove(player: Player) {
+        tabMap[player.uuid]?.removeViewer(player)
+        tabMap.remove(player.uuid)
     }
 
 }
