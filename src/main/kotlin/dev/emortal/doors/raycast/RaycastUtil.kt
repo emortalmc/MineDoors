@@ -24,6 +24,7 @@ object RaycastUtil {
         Block.IRON_DOOR,
         Block.OAK_DOOR,
         Block.SPRUCE_DOOR,
+        Block.SPRUCE_TRAPDOOR
     )
 
 

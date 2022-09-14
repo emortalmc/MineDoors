@@ -15,7 +15,13 @@ class RushPathfinding(val instance: Instance) {
 //        if (instance.getChunkAt(it.first) == null) {
 //            return@filter false
 //        }
-        val block = instance.getBlock(it.first)
+        // Check for unloaded chunks
+        val block: Block
+        try {
+            block = instance.getBlock(it.first)
+        } catch (e: NullPointerException) {
+            return@filter false
+        }
         val blockAbove = instance.getBlock(it.first.add(0.0, 1.0, 0.0))
         (!block.isSolid || block.compare(Block.IRON_DOOR)) && (!blockAbove.isSolid || blockAbove.compare(Block.IRON_DOOR))
     }.map { PathNode(it.first) to it.second }

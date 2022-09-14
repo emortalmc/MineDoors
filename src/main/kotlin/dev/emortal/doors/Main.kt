@@ -18,7 +18,6 @@ import net.minestom.server.coordinate.Vec
 import net.minestom.server.extras.MojangAuth
 import net.minestom.server.extras.bungee.BungeeCordProxy
 import net.minestom.server.extras.velocity.VelocityProxy
-import net.minestom.server.instance.DynamicChunk
 import net.minestom.server.instance.Instance
 import net.minestom.server.instance.block.Block
 import net.minestom.server.utils.Direction
@@ -27,8 +26,6 @@ import net.minestom.server.world.DimensionType
 import org.tinylog.kotlin.Logger
 import world.cepi.kstom.Manager
 import world.cepi.kstom.command.register
-import world.cepi.kstom.util.asPos
-import world.cepi.kstom.util.chunksInRange
 import world.cepi.kstom.util.register
 import java.io.IOException
 import java.io.InputStream
@@ -41,7 +38,7 @@ import kotlin.io.path.isDirectory
 
 
 fun Instance.relight(position: Pos) {
-    val chunks = chunksInRange(position.asPos(), 3).mapNotNull { getChunk(it.first, it.second) as? DynamicChunk }
+//    val chunks = chunksInRange(position.asPos(), 3).mapNotNull { getChunk(it.first, it.second) as? DynamicChunk }
 
 //    chunks.forEach {
 //        it.invalidate()
@@ -49,10 +46,10 @@ fun Instance.relight(position: Pos) {
 //            it.blockLight.invalidate()
 //        }
 //    }
-    chunks.forEach {
-        it.sendChunk()
+//    chunks.forEach {
+//        it.sendChunk()
 //        sendGroupedPacket(it.createLightPacket())
-    }
+//    }
 }
 
 val schematics = Files.list(Path.of("./rooms/"))

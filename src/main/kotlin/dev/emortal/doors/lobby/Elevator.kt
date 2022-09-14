@@ -101,6 +101,9 @@ data class Elevator(val game: DoorsLobby, val instance: Instance, val doorPos: P
             } else {
                 player.velocity = Vec(15.0, 5.0, 0.0)
             }
+
+            player.playSound(Sound.sound(SoundEvent.ENTITY_VILLAGER_NO, Sound.Source.MASTER, 1f, 1f), Sound.Emitter.self())
+            player.sendActionBar(Component.text("That elevator is full", NamedTextColor.RED))
             return
         }
 

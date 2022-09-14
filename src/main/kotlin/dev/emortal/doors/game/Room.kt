@@ -166,12 +166,15 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
 
     var removalBatch: AbsoluteBlockBatch? = null
 
+    var closets: Int = 0
 
     val number = game.roomNum.incrementAndGet()
 
     fun applyRoom(schemList: Collection<SpongeSchematic> = schematics.toMutableList()): CompletableFuture<Void>? {
         val randomSchem = schemList.shuffled().firstOrNull { schem ->
             val bounds = schem.bounds(position, direction)
+            if (bounds.outOfBounds()) return@firstOrNull false
+
             val doors = schem.doors(position, direction)
 
             // check that the attempted schem
@@ -243,10 +246,15 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
             batch.setBlock(rotatedBlock.first, rotatedBlock.second)
         }
 
+        val closetStateId = Block.SPRUCE_DOOR.withProperties(mapOf("half" to "lower", "hinge" to "left")).stateId()
+        closets = blockList.count { it.stateId == closetStateId }
+
         val availableDoorPositions = doorPositions.filter { door ->
             if (door.second == Direction.SOUTH) return@filter false
 
+            // TODO - doesn't really work properly
             val doorbound = randomSchem.bounds(door.first, door.second)
+            if (doorbound.outOfBounds()) return@filter false
 
             game.rooms.none { otherRoom ->
                 if (otherRoom.number + 1 == number) return@none false

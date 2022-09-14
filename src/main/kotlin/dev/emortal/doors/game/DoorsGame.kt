@@ -1,6 +1,5 @@
 package dev.emortal.doors.game
 
-import dev.emortal.doors.Achievements
 import dev.emortal.doors.applyRotationToBlock
 import dev.emortal.doors.block.SingleChestHandler
 import dev.emortal.doors.damage.DoorsEntity
@@ -16,6 +15,7 @@ import dev.emortal.doors.util.MultilineHologramAEC
 import dev.emortal.doors.util.lerp
 import dev.emortal.immortal.config.GameOptions
 import dev.emortal.immortal.game.Game
+import dev.emortal.immortal.game.Team
 import dev.hypera.scaffolding.schematic.impl.SpongeSchematic
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.sound.Sound
@@ -23,7 +23,6 @@ import net.kyori.adventure.sound.SoundStop
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import net.kyori.adventure.text.format.TextColor
-import net.kyori.adventure.text.minimessage.MiniMessage
 import net.kyori.adventure.title.Title
 import net.minestom.server.attribute.Attribute
 import net.minestom.server.coordinate.Point
@@ -45,6 +44,7 @@ import net.minestom.server.instance.batch.AbsoluteBlockBatch
 import net.minestom.server.instance.block.Block
 import net.minestom.server.network.packet.server.play.BlockActionPacket
 import net.minestom.server.network.packet.server.play.EntitySoundEffectPacket
+import net.minestom.server.network.packet.server.play.TeamsPacket.NameTagVisibility
 import net.minestom.server.potion.Potion
 import net.minestom.server.potion.PotionEffect
 import net.minestom.server.sound.SoundEvent
@@ -73,8 +73,12 @@ import kotlin.math.floor
 class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
     companion object {
+        val team = Team("everyone", nameTagVisibility = NameTagVisibility.NEVER)
+
         val hidingTag = Tag.Boolean("hiding")
 
+        const val doorRange = 3.8
+        const val rushRange = 10.0
         const val maxLoadedRooms = 8
 
         fun applyDoor(game: DoorsGame, batch: AbsoluteBlockBatch, doorSchem: SpongeSchematic, doorPos: Point, direction: Direction, instance: Instance) {
@@ -104,6 +108,10 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
     val roomNum = AtomicInteger(-1)
 
+    // 0.0 - 1.0
+    var rushChance = 0.0
+    var eyesChance = 0.0
+
     val doorPositions = CopyOnWriteArrayList<Point>()
     val rooms = CopyOnWriteArrayList<Room>()
     var activeDoorDirection: Direction = Direction.NORTH
@@ -118,6 +126,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
     private var doorTask: ExecutorRunnable? = null
 
     val executor = Executors.newScheduledThreadPool(1)
+
 
     override fun gameStarted() {
         val instance = instance.get() ?: return
@@ -184,9 +193,11 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
     }
 
     override fun playerJoin(player: Player) {
-        val msg = MiniMessage.miniMessage().deserialize("Press <light_purple><key:key.advancements><reset> to view your achievements.")
-        player.sendMessage(msg)
-        Achievements.create(player)
+        team.add(player)
+
+//        val msg = MiniMessage.miniMessage().deserialize("Press <light_purple><key:key.advancements><reset> to view your achievements.")
+//        player.sendMessage(msg)
+//        Achievements.create(player)
 
         if (doorTask != null) player.playSound(Sound.sound(Key.key("music.elevatorjam"), Sound.Source.MASTER, 0.6f, 1f), Sound.Emitter.self())
 
@@ -214,7 +225,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
     }
 
     override fun playerLeave(player: Player) {
-        Achievements.remove(player)
+//        Achievements.remove(player)
     }
 
     override fun registerEvents() {
@@ -239,74 +250,8 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 //            }
 
             if (message == "eyessss") {
-                val entity = Entity(EntityType.AREA_EFFECT_CLOUD)
-                val meta = entity.entityMeta as AreaEffectCloudMeta
-//                meta.setNotifyAboutChanges(false)
-                meta.radius = 0f
-//                meta.isSmall = true
-//                meta.isHasGlowingEffect = true
-//                meta.isHasNoBasePlate = true
-//                meta.isMarker = true
-//                meta.isInvisible = true
-                meta.isCustomNameVisible = true
-                meta.customName = Component.text("\uF80D\uE013\uF80D")
-                meta.isHasNoGravity = true
-                meta.setNotifyAboutChanges(true)
-
-                val roomNumberOnSpawn = roomNum.get()
-
-                val originalPosition = player.position.add(0.0, 0.5, 0.0)
-
-                entity.setInstance(instance, originalPosition)
-                instance.setBlock(originalPosition, Block.LIGHT)
-
-                instance.playSound(Sound.sound(Key.key("entity.eyes.initiate"), Sound.Source.MASTER, 1f, 1f), originalPosition)
-
-                entity.scheduler().buildTask {
-                    instance.playSound(Sound.sound(Key.key("entity.eyes.ambiance"), Sound.Source.MASTER, 1f, 1f), originalPosition)
-                }.repeat(110, TimeUnit.SERVER_TICK).schedule()
-
-                entity.scheduler().buildTask {
-
-                    if (roomNumberOnSpawn != roomNum.get()) {
-                        instance.stopSound(SoundStop.named(Key.key("entity.eyes.ambiance")))
-                        instance.stopSound(SoundStop.named(Key.key("entity.eyes.initiate")))
-                        entity.remove()
-                    }
-
-                    val random = ThreadLocalRandom.current()
-                    val jitter = 0.03
-
-                    entity.teleport(originalPosition.add(random.nextDouble(-jitter, jitter), random.nextDouble(-jitter, jitter), random.nextDouble(-jitter, jitter)))
-
-                    val playerPos = player.position.add(0.0, 1.6, 0.0)
-                    val distanceToEye = playerPos.distance(originalPosition)
-                    val directionToEye = playerPos.sub(originalPosition).asVec().normalize()
-                    val raycast = RaycastUtil.raycastBlock(instance, entity.position, directionToEye, maxDistance = distanceToEye)
-
-                    players.forEach {
-                        if (it.gameMode != GameMode.ADVENTURE) return@forEach
-
-                        val dir = Pos.ZERO.withDirection(originalPosition.add(0.0, 1.0, 0.0).sub(playerPos).asVec().normalize())
-                        val yawDiff = dir.yaw - it.position.yaw
-                        val pitchDiff = dir.pitch - it.position.pitch
-
-                        //it.sendMessage("yaw: ${yawDiff}, pitch: ${pitchDiff}")
-
-                        if (yawDiff > -70 && yawDiff < 70 && pitchDiff > -55 && pitchDiff < 46) {
-                            if (it.aliveTicks % 4L == 0L) {
-                                it.playSound(Sound.sound(Key.key("entity.eyes.attack"), Sound.Source.MASTER, 1f, 1f))
-                                it.damage(EyesDamage(entity), 2f)
-                            }
-                        }
-                    }
-
-                    if (raycast != null) {
-                        player.sendMessage(instance.getBlock(raycast).name())
-                    }
-
-                    meta.isCustomNameVisible = raycast == null
-                }.repeat(1, TimeUnit.SERVER_TICK).schedule()
+                spawnEyes(instance)
+                isCancelled = true
             }
 
             if (message == "rushhhh") {
@@ -394,7 +339,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
             }
             val distanceToDoor = player.position.distanceSquared(activeDoorPosition)
 
-            if (distanceToDoor < 3.8 * 3.8) {
+            if (distanceToDoor < doorRange * doorRange) {
                 generateNextRoom(instance)
             }
         }
@@ -406,50 +351,104 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 //        )
 
         player.gameMode = GameMode.SPECTATOR
+        player.isInvisible = true
 
-        player.playSound(Sound.sound(Key.key("custom.death"), Sound.Source.MASTER, 0.6f, 1f), Sound.Emitter.self())
-        player.sendActionBar(Component.text("\uE00A"))
+        fun deathAnimation() {
+            player.playSound(Sound.sound(Key.key("custom.death"), Sound.Source.MASTER, 0.6f, 1f), Sound.Emitter.self())
+            player.sendActionBar(Component.text("\uE00A"))
 
-        player.showTitle(
-            Title.title(
-                Component.text("\uE019", TextColor.color(255, 200, 200)),
-                Component.empty(),
-                Title.Times.times(Duration.ofMillis(0), Duration.ofMillis(1500), Duration.ofMillis(500))
+            player.showTitle(
+                Title.title(
+                    Component.text("\uE019", TextColor.color(255, 200, 200)),
+                    Component.empty(),
+                    Title.Times.times(Duration.ofMillis(0), Duration.ofMillis(1500), Duration.ofMillis(500))
+                )
             )
-        )
 
-        val bgCharacters = listOf('\uE015', '\uE016', '\uE017', '\uE018')
+            val bgCharacters = listOf('\uE015', '\uE016', '\uE017', '\uE018')
 
-        val messages = listOf(killer.messages.first().first) + killer.messages.first().second.split(". ").map { if (it.endsWith(".")) it else "${it}." }
+            val messages = listOf(killer.messages.first().first) + killer.messages.first().second.split(". ").map { if (it.endsWith(".")) it else "${it}." }
 
-        object : ExecutorRunnable(delay = Duration.ofSeconds(2), repeat = Duration.ofMillis(50), iterations = 20 * 4 * messages.size, executor = executor) {
+            val ticksPerMessage = (20 * 6.5).toInt()
 
-            override fun run() {
-                val currentIter = currentIteration.get()
+            object : ExecutorRunnable(delay = Duration.ofSeconds(2), repeat = Duration.ofMillis(50), iterations = ticksPerMessage * messages.size, executor = executor) {
 
-                if (currentIter == 0) {
-                    player.playSound(Sound.sound(Key.key("music.guidinglight"), Sound.Source.MASTER, 0.6f, 1f), Sound.Emitter.self())
-                }
-                if (currentIter % 80 == 0) {
-                    val currentMessage = messages[(currentIter.toDouble() / 80.0).toInt()]
+                override fun run() {
+                    val currentIter = currentIteration.get()
 
-                    player.showTitle(
-                        Title.title(
-                            Component.empty(),
-                            Component.text(currentMessage, TextColor.color(183, 245, 245)),
-                            Title.Times.times(Duration.ofMillis(300), Duration.ofMillis(3400), Duration.ofMillis(300))
+                    if (currentIter == 0) {
+                        player.playSound(Sound.sound(Key.key("music.guidinglight"), Sound.Source.MASTER, 0.6f, 1f), Sound.Emitter.self())
+                    }
+                    if (currentIter % ticksPerMessage == 0) {
+                        val currentMessage = messages[(currentIter.toDouble() / 80.0).toInt()]
+
+                        player.showTitle(
+                            Title.title(
+                                Component.empty(),
+                                Component.text(currentMessage, TextColor.color(183, 245, 245)),
+                                Title.Times.times(Duration.ofMillis(300), Duration.ofMillis((ticksPerMessage * 50L) - 600L), Duration.ofMillis(300))
+                            )
                         )
-                    )
+                    }
+
+                    player.sendActionBar(Component.text(bgCharacters[currentIter % bgCharacters.size]))
                 }
 
-                player.sendActionBar(Component.text(bgCharacters[currentIter % bgCharacters.size]))
-            }
+                override fun cancelled() {
+                    player.stopSound(SoundStop.named(Key.key("music.guidinglight")))
+                    player.playSound(Sound.sound(Key.key("music.guidinglight.ending"), Sound.Source.MASTER, 0.6f, 1f), Sound.Emitter.self())
 
-            override fun cancelled() {
-                player.stopSound(SoundStop.named(Key.key("music.guidinglight")))
-                player.playSound(Sound.sound(Key.key("music.guidinglight.ending"), Sound.Source.MASTER, 0.6f, 1f), Sound.Emitter.self())
+                    val playerToSpectate = players.filter { it != player }.randomOrNull()
+                    if (playerToSpectate != null) player.spectate(playerToSpectate)
+                }
             }
         }
+
+        if (killer == DoorsEntity.RUSH) {
+            val firstTitle = 10
+            val secondTitle = ThreadLocalRandom.current().nextInt(30, 45)
+            val jumpscare = ThreadLocalRandom.current().nextInt(80, 110)
+
+            object : ExecutorRunnable(repeat = Duration.ofMillis(50), executor = executor, iterations = jumpscare + 24) {
+                override fun run() {
+                    val currentIter = currentIteration.get()
+
+                    player.sendActionBar(Component.text("\uE00A"))
+
+                    if (currentIter == firstTitle || currentIter == secondTitle) {
+                        player.playSound(Sound.sound(Key.key("entity.rush.jumpscare"), Sound.Source.MASTER, 0.8f, if (currentIter == firstTitle) 1f else 1.2f))
+                        player.showTitle(
+                            Title.title(
+                                Component.text(if (currentIter == firstTitle) "\uE01A" else "\uE01B"),
+                                Component.empty(),
+                                Title.Times.times(Duration.ZERO, Duration.ofSeconds(4), Duration.ZERO)
+                            )
+                        )
+                    }
+
+                    if (currentIter == jumpscare) {
+                        player.stopSound(SoundStop.named(Key.key("entity.rush.jumpscare")))
+                        player.playSound(Sound.sound(Key.key("entity.rush.death"), Sound.Source.MASTER, 0.8f, 1f))
+
+                        player.showTitle(
+                            Title.title(
+                                Component.text("\uE01C"),
+                                Component.empty(),
+                                Title.Times.times(Duration.ZERO, Duration.ofMillis(1200), Duration.ZERO)
+                            )
+                        )
+                    }
+                }
+
+                override fun cancelled() {
+                    player.clearTitle()
+                    deathAnimation()
+                }
+            }
+        } else {
+            deathAnimation()
+        }
+
     }
 
     private fun generateNextRoom(instance: Instance) {
@@ -459,6 +458,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
         generatingRoom.set(true)
 
         val newRoom = Room(this@DoorsGame, instance, newRoomEntryPos, activeDoorDirection)
+
         val applyRoom = newRoom.applyRoom()
 
         if (applyRoom == null) {
@@ -501,30 +501,43 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                 Entity.getEntity(it)?.remove()
             }
             roomToRemove.entityIds.clear()
+        }
 
+        // Only begin allowing entity spawns above or on room 5
+        if (roomNum.get() >= 5) {
+            rushChance += 0.07 // 7% per room
+            eyesChance += 0.003 // 0.3% per room
 
+            // Roll
+            val random = ThreadLocalRandom.current()
+
+            if (random.nextDouble() < rushChance) {
+                // If room does not have atleast 2 closets
+                if (newRoom.closets < 2) {
+                    // guarantee rush for next available room
+                    rushChance = 1.0
+                } else {
+                    spawnRush(instance)
+                    rushChance = 0.0
+                }
+            }
+            if (random.nextDouble() < eyesChance) {
+                spawnEyes(instance)
+                eyesChance = 0.0
+            }
+
+            // 10% chance for a fake flicker
+            if (random.nextDouble() < 0.10) {
+                flickerLights(instance)
+            }
         }
     }
 
-    fun spawnRush(instance: Instance) {
-        val entity = Entity(EntityType.ARMOR_STAND)
-        val meta = entity.entityMeta as ArmorStandMeta
-        meta.setNotifyAboutChanges(false)
-        //meta.radius = 0f
-        meta.isSmall = true
-        meta.isHasGlowingEffect = true
-        meta.isHasNoBasePlate = true
-        meta.isMarker = true
-        meta.isInvisible = true
-        meta.isCustomNameVisible = true
-        meta.customName = Component.text("\uF80D\uE012\uF80D")
-        meta.isHasNoGravity = true
-        meta.setNotifyAboutChanges(true)
-
+    fun flickerLights(instance: Instance) {
         val lights = rooms.last().lightBlocks.toMutableList()
 
         if (lights.isNotEmpty()) {
-            object : ExecutorRunnable(repeat = Duration.ofMillis(150), iterations = 12, executor = executor) {
+            object : ExecutorRunnable(repeat = Duration.ofMillis(200), iterations = 8, executor = executor) {
                 var lightBreakIndex = 0
                 var loopIndex = 0
 
@@ -543,6 +556,24 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                 }
             }
         }
+    }
+
+    fun spawnRush(instance: Instance) {
+        val entity = Entity(EntityType.ARMOR_STAND)
+        val meta = entity.entityMeta as ArmorStandMeta
+        meta.setNotifyAboutChanges(false)
+        //meta.radius = 0f
+        meta.isSmall = true
+        meta.isHasGlowingEffect = true
+        meta.isHasNoBasePlate = true
+        meta.isMarker = true
+        meta.isInvisible = true
+        meta.isCustomNameVisible = true
+        meta.customName = Component.text("\uF80D\uE012\uF80D")
+        meta.isHasNoGravity = true
+        meta.setNotifyAboutChanges(true)
+
+        flickerLights(instance)
 
         val paths = mutableListOf<List<Point>>()
 
@@ -566,6 +597,16 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                     paths.add(path.reversed())
                 }
             }
+        }
+
+        entity.isGlowing = true
+        entity.updateViewableRule { player ->
+            val playerPos = player.position.add(0.0, 1.6, 0.0)
+            val distanceToEye = playerPos.distance(entity.position)
+            val directionToEye = playerPos.sub(entity.position).asVec().normalize()
+            val raycast = RaycastUtil.raycastBlock(instance, entity.position, directionToEye, maxDistance = distanceToEye)
+
+            raycast == null
         }
 
         entity.setInstance(instance, doorPoses.first()).thenRun {
@@ -600,6 +641,13 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                         ),
                         entity.position.add(0.0, 1.0, 0.0).asVec()
                     )
+
+                    // Get players that are inside of rush's range and are not hiding in a closet
+                    instance.players.filter { !it.hasTag(hidingTag) && it.getDistanceSquared(entity) < rushRange * rushRange }.forEach {
+                        it.damage(RushDamage(entity), 420f)
+                    }
+
+                    entity.updateViewableRule()
 
                     doorIndex += 1
 
@@ -646,6 +694,94 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                 }
             }
         }
+    }
+
+    fun spawnEyes(instance: Instance) {
+        val entity = Entity(EntityType.AREA_EFFECT_CLOUD)
+        val meta = entity.entityMeta as AreaEffectCloudMeta
+//                meta.setNotifyAboutChanges(false)
+        meta.radius = 0f
+//                meta.isSmall = true
+//                meta.isHasGlowingEffect = true
+//                meta.isHasNoBasePlate = true
+//                meta.isMarker = true
+//                meta.isInvisible = true
+        meta.isCustomNameVisible = true
+        meta.customName = Component.text("\uF80D\uE013\uF80D")
+        meta.isHasNoGravity = true
+        meta.setNotifyAboutChanges(true)
+
+        val roomNumberOnSpawn = roomNum.get()
+
+        val lastRoom = rooms.last()
+        val lastRoomBounds = lastRoom.schematic.bounds(lastRoom.position, lastRoom.direction)
+
+        var startPos = lastRoomBounds.bottomRight.lerp(lastRoomBounds.topLeft, 0.5).asPosition()
+
+        var firstBlockY = lastRoomBounds.bottomRight.y()
+        var airBlockY = 0.0
+        var eyesSpawnPosition: Pos? = null
+        stuff@ while (eyesSpawnPosition == null) {
+            if (!instance.getBlock(startPos.withY(firstBlockY)).isAir) {
+                airBlockY = firstBlockY + 1.0
+                while (!instance.getBlock(startPos.withY(airBlockY)).isAir) {
+                    airBlockY++
+                }
+                eyesSpawnPosition = startPos.withY(airBlockY + 1.0)
+            }
+
+            firstBlockY++
+        }
+
+        entity.setInstance(instance, eyesSpawnPosition)
+
+        instance.setBlock(eyesSpawnPosition, Block.LIGHT)
+
+        instance.playSound(Sound.sound(Key.key("entity.eyes.initiate"), Sound.Source.MASTER, 1f, 1f), eyesSpawnPosition)
+
+        entity.scheduler().buildTask {
+            instance.playSound(Sound.sound(Key.key("entity.eyes.ambiance"), Sound.Source.MASTER, 1f, 1f), eyesSpawnPosition)
+        }.repeat(110, TimeUnit.SERVER_TICK).schedule()
+
+        entity.scheduler().buildTask {
+
+            if (roomNumberOnSpawn != roomNum.get()) {
+                instance.stopSound(SoundStop.named(Key.key("entity.eyes.ambiance")))
+                instance.stopSound(SoundStop.named(Key.key("entity.eyes.initiate")))
+                entity.remove()
+            }
+
+            val random = ThreadLocalRandom.current()
+            val jitter = 0.03
+
+            entity.teleport(eyesSpawnPosition.add(random.nextDouble(-jitter, jitter), random.nextDouble(-jitter, jitter), random.nextDouble(-jitter, jitter)))
+
+            entity.updateViewableRule { player ->
+                val playerPos = player.position.add(0.0, 1.6, 0.0)
+                val distanceToEye = playerPos.distance(eyesSpawnPosition)
+                val directionToEye = playerPos.sub(eyesSpawnPosition).asVec().normalize()
+                val raycast = RaycastUtil.raycastBlock(instance, entity.position, directionToEye, maxDistance = distanceToEye)
+
+                raycast == null
+            }
+
+            // Don't deal damage for 2.5 seconds
+            if (entity.aliveTicks > 50) players.forEach {
+                if (it.gameMode != GameMode.ADVENTURE) return@forEach
+                if (!entity.viewers.contains(it)) return@forEach
+
+                val dir = Pos.ZERO.withDirection(eyesSpawnPosition.add(0.0, 1.0, 0.0).sub(it.position).asVec().normalize())
+                val yawDiff = dir.yaw - it.position.yaw
+                val pitchDiff = dir.pitch - it.position.pitch
+
+                if (yawDiff > -70 && yawDiff < 70 && pitchDiff > -55 && pitchDiff < 46) {
+                    if (it.aliveTicks % 4L == 0L) {
+                        it.playSound(Sound.sound(Key.key("entity.eyes.attack"), Sound.Source.MASTER, 1f, 1f))
+                        it.damage(EyesDamage(entity), 2f)
+                    }
+                }
+            }
+        }.repeat(1, TimeUnit.SERVER_TICK).schedule()
     }
 
     override fun instanceCreate(): Instance {

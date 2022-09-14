@@ -15,6 +15,13 @@ import kotlin.math.min
 
 data class RoomBounds(val topLeft: Point, val bottomRight: Point) {
 
+    fun outOfBounds(): Boolean {
+        val maxY = max(topLeft.blockY(), bottomRight.blockY())
+        val minY = min(topLeft.blockY(), bottomRight.blockY())
+
+        return maxY > 320 || minY <= -64
+    }
+
     fun visualize(player: Player) {
         val firstMinX = min(topLeft.blockX(), bottomRight.blockX()) + 1
         val firstMinZ = min(topLeft.blockZ(), bottomRight.blockZ()) + 1
