@@ -5,6 +5,7 @@ import net.minestom.server.instance.block.BlockHandler
 import net.minestom.server.inventory.Inventory
 import net.minestom.server.inventory.InventoryType
 import net.minestom.server.utils.NamespaceID
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 class ChestHandler : BlockHandler {
@@ -23,9 +24,6 @@ class ChestHandler : BlockHandler {
 
     val inventory: Inventory = Inventory(InventoryType.CHEST_2_ROW, "Chest")
     val playersInside = AtomicInteger(0)
-
-    companion object {
-        fun create(): Block = Block.CHEST.withHandler(ChestHandler())
-    }
+    val generatedLoot = AtomicBoolean(false)
 
 }
