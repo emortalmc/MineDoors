@@ -7,7 +7,17 @@ import net.minestom.server.inventory.InventoryType
 import net.minestom.server.utils.NamespaceID
 import java.util.concurrent.atomic.AtomicInteger
 
-class SingleChestHandler : BlockHandler {
+class ChestHandler : BlockHandler {
+
+    val main: ChestHandler
+
+    constructor() {
+        main = this
+    }
+
+    constructor(mainChest: ChestHandler) {
+        main = mainChest
+    }
 
     override fun getNamespaceId(): NamespaceID = Block.CHEST.namespace()
 
@@ -15,7 +25,7 @@ class SingleChestHandler : BlockHandler {
     val playersInside = AtomicInteger(0)
 
     companion object {
-        fun create(): Block = Block.CHEST.withHandler(SingleChestHandler())
+        fun create(): Block = Block.CHEST.withHandler(ChestHandler())
     }
 
 }

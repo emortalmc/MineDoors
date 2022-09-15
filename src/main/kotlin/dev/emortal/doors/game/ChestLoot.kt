@@ -1,6 +1,6 @@
 package dev.emortal.doors.game
 
-import dev.emortal.doors.block.SingleChestHandler
+import dev.emortal.doors.block.ChestHandler
 import net.kyori.adventure.sound.Sound
 import net.kyori.adventure.text.Component
 import net.minestom.server.coordinate.Point
@@ -9,10 +9,10 @@ import net.minestom.server.instance.block.Block
 import net.minestom.server.sound.SoundEvent
 
 object ChestLoot {
-    private val openChests: HashMap<Player, SingleChestHandler> = HashMap()
+    private val openChests: HashMap<Player, ChestHandler> = HashMap()
 
     fun openChest(player: Player, block: Block, blockPosition: Point) {
-        val handler = block.handler() as? SingleChestHandler ?: return
+        val handler = (block.handler() as? ChestHandler ?: return).main
 
         if (handler.playersInside.get() > 0) {
             player.sendActionBar(Component.text("There is already someone looting this chest"))

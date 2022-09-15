@@ -2,10 +2,11 @@ package dev.emortal.doors.game
 
 import dev.emortal.doors.applyRotationToBlock
 import dev.emortal.doors.block.SignHandler
-import dev.emortal.doors.block.SingleChestHandler
+import dev.emortal.doors.block.ChestHandler
 import dev.emortal.doors.doorSchem
 import dev.emortal.doors.game.DoorsGame.Companion.applyDoor
 import dev.emortal.doors.pathfinding.offset
+import dev.emortal.doors.pathfinding.rotate
 import dev.emortal.doors.relight
 import dev.emortal.doors.schematics
 import dev.emortal.doors.util.RoomBounds
@@ -27,6 +28,7 @@ import net.minestom.server.utils.time.TimeUnit
 import org.jglrxavpok.hephaistos.nbt.NBTCompound
 import org.jglrxavpok.hephaistos.parser.SNBTParser
 import org.tinylog.kotlin.Logger
+import world.cepi.kstom.item.get
 import world.cepi.kstom.util.asPos
 import java.io.StringReader
 import java.util.concurrent.CompletableFuture
@@ -211,6 +213,8 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
 
         val blockList = mutableListOf<Region.Block>()
 
+        val doubleChests = mutableMapOf<Point, Pair<Point, Block>>()
+
         randomSchem.apply { x, y, z, block ->
             val rotatedBlock = applyRotationToBlock(position, x, y, z, block, direction, randomSchem)
 
@@ -224,7 +228,24 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
             // Initialize chests
             if (rotatedBlock.second.compare(Block.CHEST)) {
                 chests.add(rotatedBlock.first)
-                batch.setBlock(rotatedBlock.first, rotatedBlock.second.withHandler(SingleChestHandler()))
+                val type = rotatedBlock.second.getProperty("type")
+                if (type == "single") {
+                    batch.setBlock(rotatedBlock.first, rotatedBlock.second.withHandler(ChestHandler()))
+                } else { // left or right
+                    if (doubleChests.containsKey(rotatedBlock.first)) {
+                        val doubleChest = doubleChests[rotatedBlock.first]!!
+                        val handler = ChestHandler()
+                        batch.setBlock(rotatedBlock.first, rotatedBlock.second.withHandler(handler))
+                        batch.setBlock(doubleChest.first, doubleChest.second.withHandler(ChestHandler(handler)))
+                        doubleChests.remove(rotatedBlock.first)
+                    } else {
+                        val newPos = rotatedBlock.first.add(
+                            Direction.valueOf(rotatedBlock.second.getProperty("facing").uppercase()).rotate().rotate()
+                                .rotate().offset()
+                        )
+                        doubleChests[newPos] = rotatedBlock
+                    }
+                }
                 return@apply
             }
 

@@ -1,7 +1,6 @@
 package dev.emortal.doors.game
 
 import dev.emortal.doors.applyRotationToBlock
-import dev.emortal.doors.block.SingleChestHandler
 import dev.emortal.doors.damage.DoorsEntity
 import dev.emortal.doors.damage.EyesDamage
 import dev.emortal.doors.damage.HideDamage
