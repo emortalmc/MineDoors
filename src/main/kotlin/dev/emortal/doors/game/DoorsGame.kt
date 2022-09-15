@@ -35,6 +35,7 @@ import net.minestom.server.entity.Player
 import net.minestom.server.entity.metadata.other.AreaEffectCloudMeta
 import net.minestom.server.entity.metadata.other.ArmorStandMeta
 import net.minestom.server.event.entity.EntityDamageEvent
+import net.minestom.server.event.inventory.InventoryCloseEvent
 import net.minestom.server.event.player.PlayerBlockInteractEvent
 import net.minestom.server.event.player.PlayerChatEvent
 import net.minestom.server.event.player.PlayerMoveEvent
@@ -283,14 +284,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
             }
 
             else if (block.compare(Block.CHEST)) {
-                val handler = block.handler() as? SingleChestHandler ?: return@listenOnly
-
-                player.openInventory(handler.inventory)
-
-                instance.playSound(
-                    Sound.sound(SoundEvent.BLOCK_CHEST_OPEN, Sound.Source.BLOCK, 1f, 1f),
-                    blockPosition.add(0.5)
-                )
+                ChestLoot.openChest(player, block, blockPosition)
             }
 
             else if (block.compare(Block.SPRUCE_DOOR)) {
@@ -309,6 +303,10 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                 isCancelled = true
                 isBlockingItemUse = true
             }
+        }
+
+        eventNode.listenOnly<InventoryCloseEvent> {
+            ChestLoot.freeChest(player)
         }
 
         eventNode.listenOnly<EntityDamageEvent> {
