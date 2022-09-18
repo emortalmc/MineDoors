@@ -1,12 +1,14 @@
 package dev.emortal.doors.lobby
 
 import dev.emortal.doors.game.DoorsGame
-import dev.emortal.doors.util.ExecutorRunnable
 import dev.emortal.doors.util.MultilineHologramAEC
 import dev.emortal.doors.util.RoomBounds
 import dev.emortal.immortal.config.GameOptions
 import dev.emortal.immortal.game.GameManager.joinGame
+import dev.emortal.immortal.util.ExecutorRunnable
+import net.kyori.adventure.key.Key
 import net.kyori.adventure.sound.Sound
+import net.kyori.adventure.sound.SoundStop
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import net.minestom.server.coordinate.Point
@@ -55,7 +57,17 @@ data class Elevator(val game: DoorsLobby, val instance: Instance, val doorPos: P
                     }
                 }
 
-                if (secondsLeft <= 0) {
+                if (secondsLeft < 0) {
+                    hologram.setLine(1, Component.text("Joining", NamedTextColor.GRAY))
+
+                    players.forEach {
+                        it.stopSound(SoundStop.named(Key.key("music.dawnofthedoors")))
+                        it.sendMessage("play sound")
+                        it.playSound(Sound.sound(Key.key("music.dawnofthedoors.ending"), Sound.Source.MASTER, 1f, 1f), Sound.Emitter.self())
+                        game.musicTasks[it.uuid]?.cancel()
+                        game.musicTasks.remove(it.uuid)
+                    }
+
                     val preparedGame = DoorsGame(GameOptions(
                         players.size,
                         players.size,
@@ -66,17 +78,22 @@ data class Elevator(val game: DoorsLobby, val instance: Instance, val doorPos: P
                         allowsSpectators = true
                     ))
 
-                    players.forEach {
-                        it.joinGame(preparedGame, false, true)
-                    }
+                    preparedGame.readyFuture.thenRun {
+                        if (players.size != preparedGame.gameOptions.minPlayers) {
+                            preparedGame.gameOptions = preparedGame.gameOptions.copy(minPlayers = players.size, maxPlayers = players.size)
+                        }
+                        players.forEach {
+                            it.joinGame(preparedGame, false, true)
+                        }
 
-                    players.clear()
-                    cancelTimer()
+                        players.clear()
+                        cancelTimer()
+                    }
 
                     return
                 }
 
-                hologram.setLine(1, Component.text("${secondsLeft}s", NamedTextColor.GRAY))
+                hologram.setLine(1, Component.text("${secondsLeft + 1}s", NamedTextColor.GRAY))
             }
 
         }

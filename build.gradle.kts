@@ -23,7 +23,7 @@ dependencies {
     api("com.github.EmortalMC:KStom:50b2b882fa")
     api("com.github.emortaldev:Particable:fadfbe0213")
 
-    implementation("com.github.EmortalMC:Immortal:ba273bb925")
+    implementation("com.github.EmortalMC:Immortal:149039d602")
 
     implementation("dev.hypera:Scaffolding:0.1.3-SNAPSHOT")
     implementation("com.github.EmortalMC:Rayfast:684e854a48")

@@ -1,8 +1,8 @@
 package dev.emortal.doors.game
 
 import dev.emortal.doors.applyRotationToBlock
-import dev.emortal.doors.block.SignHandler
 import dev.emortal.doors.block.ChestHandler
+import dev.emortal.doors.block.SignHandler
 import dev.emortal.doors.doorSchem
 import dev.emortal.doors.game.DoorsGame.Companion.applyDoor
 import dev.emortal.doors.pathfinding.offset
@@ -28,12 +28,12 @@ import net.minestom.server.utils.time.TimeUnit
 import org.jglrxavpok.hephaistos.nbt.NBTCompound
 import org.jglrxavpok.hephaistos.parser.SNBTParser
 import org.tinylog.kotlin.Logger
-import world.cepi.kstom.item.get
 import world.cepi.kstom.util.asPos
 import java.io.StringReader
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CopyOnWriteArraySet
+import kotlin.collections.set
 
 
 val SpongeSchematic.offset: Point get() = Vec(offsetX.toDouble(), offsetY.toDouble(), offsetZ.toDouble())
@@ -230,13 +230,13 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
                 chests.add(rotatedBlock.first)
                 val type = rotatedBlock.second.getProperty("type")
                 if (type == "single") {
-                    batch.setBlock(rotatedBlock.first, rotatedBlock.second.withHandler(ChestHandler()))
+                    batch.setBlock(rotatedBlock.first, rotatedBlock.second.withHandler(ChestHandler(game, rotatedBlock.first)))
                 } else { // left or right
                     if (doubleChests.containsKey(rotatedBlock.first)) {
                         val doubleChest = doubleChests[rotatedBlock.first]!!
-                        val handler = ChestHandler()
+                        val handler = ChestHandler(game, rotatedBlock.first)
                         batch.setBlock(rotatedBlock.first, rotatedBlock.second.withHandler(handler))
-                        batch.setBlock(doubleChest.first, doubleChest.second.withHandler(ChestHandler(handler)))
+                        batch.setBlock(doubleChest.first, doubleChest.second.withHandler(handler))
                         doubleChests.remove(rotatedBlock.first)
                     } else {
                         val newPos = rotatedBlock.first.add(
@@ -268,7 +268,7 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
         }
 
         val closetStateId = Block.SPRUCE_DOOR.withProperties(mapOf("half" to "lower", "hinge" to "left")).stateId()
-        closets = blockList.count { it.stateId == closetStateId }
+        closets = blockList.count { Block.fromStateId(it.stateId)!!.compare(Block.SPRUCE_DOOR) } / 4
 
         val availableDoorPositions = doorPositions.filter { door ->
             if (door.second == Direction.SOUTH) return@filter false

@@ -4,7 +4,7 @@ import dev.emortal.doors.damage.HideDamage
 import dev.emortal.doors.pathfinding.offset
 import dev.emortal.doors.pathfinding.rotate
 import dev.emortal.doors.pathfinding.yaw
-import dev.emortal.doors.util.ExecutorRunnable
+import dev.emortal.immortal.util.ExecutorRunnable
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.sound.Sound
 import net.kyori.adventure.sound.SoundStop

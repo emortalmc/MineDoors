@@ -1,15 +1,23 @@
 package dev.emortal.doors
 
 import com.sun.tools.javac.Main
+import dev.emortal.doors.Main.Companion.configPath
+import dev.emortal.doors.Main.Companion.doorsConfig
 import dev.emortal.doors.block.SignHandler
+import dev.emortal.doors.commands.CreditsCommand
+import dev.emortal.doors.config.DoorsConfig
 import dev.emortal.doors.game.DoorsGame
 import dev.emortal.doors.lobby.DoorsLobby
 import dev.emortal.doors.pathfinding.rotate
 import dev.emortal.immortal.ImmortalExtension
+import dev.emortal.immortal.config.ConfigHelper
 import dev.emortal.immortal.config.GameOptions
 import dev.emortal.immortal.game.GameManager
 import dev.emortal.immortal.game.WhenToRegisterEvents
 import dev.hypera.scaffolding.schematic.impl.SpongeSchematic
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import net.kyori.adventure.text.Component
 import net.minestom.server.MinecraftServer
 import net.minestom.server.coordinate.Point
@@ -29,10 +37,13 @@ import world.cepi.kstom.command.register
 import world.cepi.kstom.util.register
 import java.io.IOException
 import java.io.InputStream
+import java.nio.file.FileSystems
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardWatchEventKinds
 import java.util.*
 import java.util.stream.Collectors
+import kotlin.io.path.absolutePathString
 import kotlin.io.path.inputStream
 import kotlin.io.path.isDirectory
 
@@ -160,9 +171,45 @@ fun applyRotationToBlock(offset: Point, x: Int, y: Int, z: Int, block: Block, di
     return newBlockPos to modifiedBlock
 }
 
+class Main() {
+    companion object {
+        val configPath = Path.of("doorsconfig.json")
+        var doorsConfig = ConfigHelper.initConfigFile(configPath, DoorsConfig(listOf()))
+    }
+}
+
 
 
 fun main() {
+
+    Logger.info("Starting DOORS :)")
+    Logger.info(configPath.absolutePathString())
+
+    // Automatically refresh config
+    val watchDirectory = Path.of("./")
+    val watchService = FileSystems.getDefault().newWatchService()
+    val pathKey = watchDirectory.register(watchService, StandardWatchEventKinds.ENTRY_CREATE,
+        StandardWatchEventKinds.ENTRY_MODIFY, StandardWatchEventKinds.ENTRY_DELETE)
+
+    CoroutineScope(Dispatchers.IO).launch {
+        while (true) {
+            val watchKey = watchService.take()
+
+            for (event in watchKey.pollEvents()) {
+                if ((event.context() as Path) == configPath) {
+                    Logger.info("Refreshed config")
+                    doorsConfig = ConfigHelper.initConfigFile(configPath, DoorsConfig(listOf()))
+                }
+
+            }
+
+            if (!watchKey.reset()) {
+                watchKey.cancel()
+                watchService.close()
+                break
+            }
+        }
+    }
 
     val minecraftServer = MinecraftServer.init()
     val instanceManager = Manager.instance
@@ -210,7 +257,7 @@ fun main() {
 
     val properties = loadProperties()
 
-    MinecraftServer.setChunkViewDistance(15)
+    System.setProperty("minestom.chunk-view-distance", "8")
 
     val onlineMode = properties.getProperty("online-mode").toBoolean()
     val address: String = properties.getProperty("address")
@@ -241,21 +288,22 @@ fun main() {
     MinecraftServer.setCompressionThreshold(compressionThreshold)
 
     StopCommand.register()
+    CreditsCommand.register()
 
     minecraftServer.start(address, port)
 }
 
-private val configPath = Path.of("./server.properties")
+private val propertiesPath = Path.of("./server.properties")
 fun loadProperties(): Properties {
     val properties = Properties()
     try {
-        if (Files.exists(configPath)) {
-            properties.load(Files.newInputStream(configPath))
+        if (Files.exists(propertiesPath)) {
+            properties.load(Files.newInputStream(propertiesPath))
         } else {
             val inputStream: InputStream =
                 Main::class.java.classLoader.getResourceAsStream("server.properties")
             properties.load(inputStream)
-            properties.store(Files.newOutputStream(configPath), "Minestom " + MinecraftServer.VERSION_NAME)
+            properties.store(Files.newOutputStream(propertiesPath), "Minestom " + MinecraftServer.VERSION_NAME)
         }
     } catch (e: IOException) {
         MinecraftServer.getExceptionManager().handleException(e)
