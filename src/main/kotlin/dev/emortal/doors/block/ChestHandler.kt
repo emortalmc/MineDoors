@@ -10,19 +10,29 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class ChestHandler : BlockHandler {
 
+    companion object {
+        val chestNames = listOf("Chest", "Drawer", "Crate")
+    }
+
     val main: ChestHandler
 
-    constructor() {
+    constructor(doubleChest: Boolean) {
         main = this
+        inventory = if(doubleChest) {
+            Inventory(InventoryType.CHEST_4_ROW, chestNames.random())
+        } else {
+            Inventory(InventoryType.CHEST_2_ROW, chestNames.random())
+        }
     }
 
     constructor(mainChest: ChestHandler) {
         main = mainChest
+        inventory = Inventory(InventoryType.CHEST_2_ROW, chestNames.random())
     }
 
     override fun getNamespaceId(): NamespaceID = Block.CHEST.namespace()
 
-    val inventory: Inventory = Inventory(InventoryType.CHEST_2_ROW, "Chest")
+    val inventory: Inventory
     val playersInside = AtomicInteger(0)
     val generatedLoot = AtomicBoolean(false)
 

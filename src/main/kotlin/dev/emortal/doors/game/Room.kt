@@ -230,11 +230,11 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
                 chests.add(rotatedBlock.first)
                 val type = rotatedBlock.second.getProperty("type")
                 if (type == "single") {
-                    batch.setBlock(rotatedBlock.first, rotatedBlock.second.withHandler(ChestHandler()))
+                    batch.setBlock(rotatedBlock.first, rotatedBlock.second.withHandler(ChestHandler(false)))
                 } else { // left or right
                     if (doubleChests.containsKey(rotatedBlock.first)) {
                         val doubleChest = doubleChests[rotatedBlock.first]!!
-                        val handler = ChestHandler()
+                        val handler = ChestHandler(true)
                         batch.setBlock(rotatedBlock.first, rotatedBlock.second.withHandler(handler))
                         batch.setBlock(doubleChest.first, doubleChest.second.withHandler(ChestHandler(handler)))
                         doubleChests.remove(rotatedBlock.first)
