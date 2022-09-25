@@ -13,7 +13,6 @@ import dev.emortal.doors.util.MultilineHologramAEC
 import dev.emortal.doors.util.lerp
 import dev.emortal.immortal.config.GameOptions
 import dev.emortal.immortal.game.Game
-import dev.emortal.immortal.game.GameManager
 import dev.emortal.immortal.util.ExecutorRunnable
 import dev.emortal.immortal.util.expInterp
 import dev.hypera.scaffolding.schematic.impl.SpongeSchematic
@@ -112,8 +111,6 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
         const val maxLoadedRooms = 8
 
         fun applyDoor(game: DoorsGame, batch: AbsoluteBlockBatch, doorSchem: SpongeSchematic, doorPos: Point, direction: Direction, instance: Instance) {
-            game.doorPositions.add(doorPos)
-
             doorSchem.apply { x, y, z, block ->
                 val rotatedBlock = applyRotationToBlock(doorPos, x, y, z, block, direction, doorSchem)
 
@@ -127,8 +124,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                 }
             }
 
-            game.activeDoorPosition = doorPos
-            game.activeDoorDirection = direction
+
         }
     }
 
@@ -267,6 +263,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
     override fun playerLeave(player: Player) {
 //        Achievements.remove(player)
+        bossBarMap.remove(player.uuid)
     }
 
     override fun registerEvents() {
@@ -303,12 +300,13 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
         var bellHealth = 10
         eventNode.listenOnly<PlayerBlockInteractEvent> {
+            if (player.gameMode != GameMode.ADVENTURE) return@listenOnly
+
             if (block.compare(Block.BELL) && bellHealth > 0) {
                 instance.playSound(Sound.sound(SoundEvent.BLOCK_BELL_USE, Sound.Source.MASTER, bellHealth.toFloat() / 10f, 2f), blockPosition)
                 instance.sendGroupedPacket(BlockActionPacket(blockPosition, 1, 2, block.stateId().toInt()))
 
                 bellHealth--
-                return@listenOnly
             }
 
             else if (block.compare(Block.POLISHED_BLACKSTONE_BUTTON) && block.getProperty("powered") == "false") {
@@ -319,8 +317,6 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
                 doorOpenSecondsLeft.set(5)
                 doorTimerHologram.setLine(0, Component.text(5, NamedTextColor.GOLD))
-
-                return@listenOnly
             }
 
             else if (block.compare(Block.CHEST)) {
@@ -336,7 +332,19 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
             }
 
             else if (block.compare(Block.OAK_DOOR)) {
+                if (block.getProperty("open") == "true") {
+                    isCancelled = true
+                    isBlockingItemUse = true
+                } else {
+                    // Open door for other players
+                    if (block.getProperty("half") == "lower") {
+                        instance.setBlock(blockPosition.add(0.0, 1.0, 0.0), block.withProperties(mapOf("open" to "true", "half" to "upper")))
+                    } else {
+                        instance.setBlock(blockPosition.add(0.0, -1.0, 0.0), block.withProperties(mapOf("open" to "true", "half" to "lower")))
+                    }
 
+                    instance.setBlock(blockPosition, block.withProperty("open", "true"))
+                }
             }
 
             else {
@@ -847,12 +855,12 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
     }
 
     val bossBarMap = ConcurrentHashMap<UUID, CoinBar>()
-    fun refreshCoinCounts(player: Player, coinsIncrease: Int, knobsIncrease: Int) {
+    fun refreshCoinCounts(player: Player, goldIncrease: Int, knobsIncrease: Int) {
 
         val coinBar = if (bossBarMap.containsKey(player.uuid)) {
             bossBarMap[player.uuid]!!
         } else {
-            val bar = BossBar.bossBar(Component.text("Knobs: 0"), 0f, BossBar.Color.GREEN, BossBar.Overlay.PROGRESS)
+            val bar = BossBar.bossBar(Component.empty(), 0f, BossBar.Color.GREEN, BossBar.Overlay.PROGRESS)
             val coinBar = CoinBar(0, 0, bar)
             bossBarMap[player.uuid] = coinBar
             player.showBossBar(bar)
@@ -864,13 +872,13 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
             override fun run() {
                 val knobsAmt = coinBar.knobs + ceil(knobsIncrease - expInterp(0f, knobsIncrease.toFloat(), i)).toInt()
-                val coinsAmt = coinBar.coins + ceil(coinsIncrease - expInterp(0f, coinsIncrease.toFloat(), i)).toInt()
+                val goldAmt = coinBar.gold + ceil(goldIncrease - expInterp(0f, goldIncrease.toFloat(), i)).toInt()
 
                 coinBar.bossBar.name(
                     Component.text()
                         .append(Component.text("Knobs: $knobsAmt", TextColor.lerp(i, NamedTextColor.WHITE, NamedTextColor.GOLD)))
                         .append(Component.text(" | ", NamedTextColor.DARK_GRAY))
-                        .append(Component.text("Coins: $coinsAmt", TextColor.lerp(i, NamedTextColor.WHITE, NamedTextColor.GOLD)))
+                        .append(Component.text("Gold: $goldAmt", TextColor.lerp(i, NamedTextColor.WHITE, NamedTextColor.GOLD)))
                 )
 
                 i -= (1f / iterations.toFloat())
@@ -881,10 +889,10 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                     Component.text()
                         .append(Component.text("Knobs: ${coinBar.knobs + knobsIncrease}"))
                         .append(Component.text(" | ", NamedTextColor.DARK_GRAY))
-                        .append(Component.text("Coins: ${coinBar.coins + coinsIncrease}"))
+                        .append(Component.text("Gold: ${coinBar.gold + goldIncrease}"))
                 )
 
-                bossBarMap[player.uuid] = coinBar.copy(knobs = coinBar.knobs + knobsIncrease, coins = coinBar.coins + coinsIncrease)
+                bossBarMap[player.uuid] = coinBar.copy(knobs = coinBar.knobs + knobsIncrease, gold = coinBar.gold + goldIncrease)
             }
         }
     }

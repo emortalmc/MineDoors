@@ -7,7 +7,6 @@ import dev.emortal.doors.doorSchem
 import dev.emortal.doors.game.DoorsGame.Companion.applyDoor
 import dev.emortal.doors.pathfinding.offset
 import dev.emortal.doors.pathfinding.rotate
-import dev.emortal.doors.relight
 import dev.emortal.doors.schematics
 import dev.emortal.doors.util.RoomBounds
 import dev.emortal.doors.util.RoomBounds.Companion.isOverlapping
@@ -24,7 +23,6 @@ import net.minestom.server.instance.batch.AbsoluteBlockBatch
 import net.minestom.server.instance.batch.BatchOption
 import net.minestom.server.instance.block.Block
 import net.minestom.server.utils.Direction
-import net.minestom.server.utils.time.TimeUnit
 import org.jglrxavpok.hephaistos.nbt.NBTCompound
 import org.jglrxavpok.hephaistos.parser.SNBTParser
 import org.tinylog.kotlin.Logger
@@ -310,12 +308,13 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
         doorPositions.forEachIndexed { i, door ->
             if (i == doorPositions.indexOf(randomDoor)) return@forEachIndexed // ignore the picked door
 
-            val block = Block.fromStateId(blockList.first { it.position.samePoint(door.first.add(0.0, 2.0, 0.0)) }.stateId)!!
-            batch.setBlock(door.first, block)
-            batch.setBlock(door.first.add(0.0, 1.0, 0.0), block)
+            applyDoor(game, batch, doorSchem, door.first, door.second, instance)
         }
 
         applyDoor(game, batch, doorSchem, randomDoor.first, randomDoor.second, instance)
+        game.activeDoorPosition = randomDoor.first
+        game.activeDoorDirection = direction
+        game.doorPositions.add(randomDoor.first)
 
         paintingPositions.forEach {
             val painting = Entity(EntityType.PAINTING)
@@ -358,9 +357,9 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
 
         val future = CompletableFuture<Void>()
         removalBatch = batch.apply(instance) {
-            instance.scheduler().buildTask {
-                instance.relight(position.asPos())
-            }.delay(2, TimeUnit.SERVER_TICK).schedule()
+//            instance.scheduler().buildTask {
+//                instance.relight(position.asPos())
+//            }.delay(2, TimeUnit.SERVER_TICK).schedule()
 
             future.complete(null)
         }!!

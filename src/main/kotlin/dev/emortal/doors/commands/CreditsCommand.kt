@@ -25,6 +25,8 @@ object CreditsCommand : Command("credits") {
                     .append(Component.text("\n - emortal", NamedTextColor.GRAY))
                     .append(Component.text("\n - DasLixou", NamedTextColor.GRAY))
 
+                    .append(Component.text("\n - the pog fish (resource pack help)", NamedTextColor.GRAY))
+
                     .append(Component.text("\n\n  Donators ❤", NamedTextColor.LIGHT_PURPLE))
                     .also {
                         doorsConfig.donators.forEach { donator ->
