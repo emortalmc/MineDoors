@@ -2,7 +2,7 @@ package dev.emortal.doors.lobby
 
 import dev.emortal.doors.game.DoorsGame
 import dev.emortal.doors.util.MultilineHologramAEC
-import dev.emortal.doors.util.RoomBounds
+import dev.emortal.doors.schematic.RoomBounds
 import dev.emortal.immortal.config.GameOptions
 import dev.emortal.immortal.game.GameManager.joinGame
 import dev.emortal.immortal.util.ExecutorRunnable
@@ -62,7 +62,6 @@ data class Elevator(val game: DoorsLobby, val instance: Instance, val doorPos: P
 
                     players.forEach {
                         it.stopSound(SoundStop.named(Key.key("music.dawnofthedoors")))
-                        it.sendMessage("play sound")
                         it.playSound(Sound.sound(Key.key("music.dawnofthedoors.ending"), Sound.Source.MASTER, 1f, 1f), Sound.Emitter.self())
                         game.musicTasks[it.uuid]?.cancel()
                         game.musicTasks.remove(it.uuid)

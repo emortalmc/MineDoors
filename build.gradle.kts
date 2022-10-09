@@ -17,16 +17,12 @@ repositories {
 }
 
 dependencies {
-    implementation("com.github.EmortalMC", "Minestom", "0657315f62")
+    implementation("com.github.EmortalMC", "Minestom", "e195ce7a95")
 //    implementation("com.github.Minestom", "Minestom", "fc90fe8852")
 
-    api("com.github.EmortalMC:KStom:50b2b882fa")
-    api("com.github.emortaldev:Particable:fadfbe0213")
-
-    implementation("com.github.EmortalMC:Immortal:149039d602")
+    implementation("com.github.EmortalMC:Immortal:1174fefda5")
 
     implementation("dev.hypera:Scaffolding:0.1.3-SNAPSHOT")
-    implementation("com.github.EmortalMC:Rayfast:684e854a48")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.4.0")

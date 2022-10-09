@@ -3,7 +3,7 @@ package dev.emortal.doors.lobby
 import dev.emortal.doors.Main.Companion.doorsConfig
 import dev.emortal.doors.game.DoorsGame
 import dev.emortal.doors.lobby.Elevator.Companion.elevatorTag
-import dev.emortal.doors.util.RoomBounds
+import dev.emortal.doors.schematic.RoomBounds
 import dev.emortal.immortal.config.GameOptions
 import dev.emortal.immortal.game.GameManager
 import dev.emortal.immortal.game.LobbyGame
@@ -18,9 +18,14 @@ import net.kyori.adventure.text.format.TextColor
 import net.kyori.adventure.text.format.TextDecoration
 import net.minestom.server.coordinate.Point
 import net.minestom.server.coordinate.Pos
+import net.minestom.server.coordinate.Vec
+import net.minestom.server.entity.Entity
+import net.minestom.server.entity.EntityType
 import net.minestom.server.entity.Player
+import net.minestom.server.entity.metadata.other.ArmorStandMeta
 import net.minestom.server.event.inventory.InventoryPreClickEvent
 import net.minestom.server.event.player.PlayerBlockInteractEvent
+import net.minestom.server.event.player.PlayerPacketEvent
 import net.minestom.server.event.player.PlayerResourcePackStatusEvent
 import net.minestom.server.event.player.PlayerTickEvent
 import net.minestom.server.instance.AnvilLoader
@@ -28,6 +33,7 @@ import net.minestom.server.instance.Instance
 import net.minestom.server.item.ItemStack
 import net.minestom.server.item.Material
 import net.minestom.server.item.metadata.LeatherArmorMeta
+import net.minestom.server.network.packet.client.play.ClientSteerVehiclePacket
 import net.minestom.server.resourcepack.ResourcePack
 import net.minestom.server.resourcepack.ResourcePackStatus
 import world.cepi.kstom.Manager
@@ -45,6 +51,8 @@ class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
 
 
     override var spawnPosition = Pos(0.0, 65.0, 0.0)
+
+    val armourStandSeatMap = ConcurrentHashMap<Entity, Point>()
 
     companion object {
         private const val url = "https://github.com/EmortalMC/Resourcepack/releases/download/latest/pack.zip"
@@ -90,6 +98,7 @@ class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
     override fun gameDestroyed() {
         executor.shutdownNow()
         musicTasks.clear()
+        armourStandSeatMap.clear()
     }
 
     override fun gameStarted() {
@@ -169,6 +178,15 @@ class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
             elevator.removePlayer(player)
         }
 
+        val playerVehicle = player.vehicle
+        if (playerVehicle != null) {
+            if (armourStandSeatMap.containsKey(playerVehicle)) {
+                armourStandSeatMap.remove(playerVehicle)
+                playerVehicle.remove()
+            }
+        }
+
+
         player.removeTag(elevatorTag)
         musicTasks[player.uuid]?.cancel()
         musicTasks.remove(player.uuid)
@@ -204,6 +222,37 @@ class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
         eventNode.listenOnly<PlayerBlockInteractEvent> {
             isCancelled = true
             isBlockingItemUse = true
+
+            if (block.name().contains("stair", true)) {
+                if (player.vehicle != null) return@listenOnly
+                if (armourStandSeatMap.values.contains(blockPosition)) return@listenOnly
+                if (block.getProperty("half") == "top") return@listenOnly
+
+                val armourStand = Entity(EntityType.ARMOR_STAND)
+                val armourStandMeta = armourStand.entityMeta as ArmorStandMeta
+                armourStandMeta.setNotifyAboutChanges(false)
+                armourStandMeta.isSmall = true
+                armourStandMeta.isHasNoBasePlate = true
+                armourStandMeta.isMarker = true
+                armourStandMeta.isInvisible = true
+                armourStandMeta.setNotifyAboutChanges(true)
+                armourStand.setNoGravity(true)
+
+                val spawnPos = blockPosition.add(0.5, 0.3, 0.5)
+                val yaw = when (block.getProperty("facing")) {
+                    "east" -> 90f
+                    "south" -> 180f
+                    "west" -> -90f
+                    else -> 0f
+                }
+
+                armourStand.setInstance(instance, Pos(spawnPos, yaw, 0f))
+                    .thenRun {
+                        armourStand.addPassenger(player)
+                    }
+
+                armourStandSeatMap[armourStand] = blockPosition
+            }
         }
 
         eventNode.listenOnly<PlayerTickEvent> {
@@ -239,6 +288,27 @@ class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
                 rightRoomCollide.addPlayer(player)
 
                 return@listenOnly
+            }
+        }
+
+        // Seats
+        eventNode.listenOnly<PlayerPacketEvent> {
+            if (packet is ClientSteerVehiclePacket) {
+                val steerPacket = packet as ClientSteerVehiclePacket
+                if (steerPacket.flags.toInt() == 2) {
+                    if (player.vehicle != null && player.vehicle !is Player) {
+                        val entity = player.vehicle!!
+                        entity.removePassenger(player)
+
+                        if (armourStandSeatMap.containsKey(entity)) {
+                            armourStandSeatMap.remove(entity)
+                            entity.remove()
+                            player.velocity = Vec(0.0, 10.0, 0.0)
+                        }
+                    }
+                    return@listenOnly
+                }
+
             }
         }
     }

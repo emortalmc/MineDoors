@@ -1,21 +1,28 @@
 package dev.emortal.doors.game
 
+import dev.emortal.doors.*
 import dev.emortal.doors.Main.Companion.doorsConfig
-import dev.emortal.doors.applyRotationToBlock
 import dev.emortal.doors.damage.DoorsEntity
 import dev.emortal.doors.damage.EyesDamage
 import dev.emortal.doors.damage.HideDamage
 import dev.emortal.doors.damage.RushDamage
 import dev.emortal.doors.pathfinding.RushPathfinding
 import dev.emortal.doors.pathfinding.offset
+import dev.emortal.doors.pathfinding.rotate
+import dev.emortal.doors.pathfinding.yaw
 import dev.emortal.doors.raycast.RaycastUtil
 import dev.emortal.doors.util.MultilineHologramAEC
 import dev.emortal.doors.util.lerp
 import dev.emortal.immortal.config.GameOptions
 import dev.emortal.immortal.game.Game
 import dev.emortal.immortal.util.ExecutorRunnable
+import dev.emortal.immortal.util.cancel
 import dev.emortal.immortal.util.expInterp
+import dev.emortal.immortal.util.setInstance
 import dev.hypera.scaffolding.schematic.impl.SpongeSchematic
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import net.kyori.adventure.bossbar.BossBar
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.sound.Sound
@@ -33,16 +40,18 @@ import net.minestom.server.entity.Entity
 import net.minestom.server.entity.EntityType
 import net.minestom.server.entity.GameMode
 import net.minestom.server.entity.Player
-import net.minestom.server.entity.metadata.other.AreaEffectCloudMeta
-import net.minestom.server.entity.metadata.other.ArmorStandMeta
+import net.minestom.server.entity.metadata.other.*
 import net.minestom.server.event.entity.EntityDamageEvent
 import net.minestom.server.event.inventory.InventoryCloseEvent
-import net.minestom.server.event.player.PlayerBlockInteractEvent
-import net.minestom.server.event.player.PlayerChatEvent
-import net.minestom.server.event.player.PlayerMoveEvent
+import net.minestom.server.event.inventory.InventoryPreClickEvent
+import net.minestom.server.event.item.ItemDropEvent
+import net.minestom.server.event.player.*
 import net.minestom.server.instance.Instance
 import net.minestom.server.instance.batch.AbsoluteBlockBatch
 import net.minestom.server.instance.block.Block
+import net.minestom.server.item.Enchantment
+import net.minestom.server.item.ItemStack
+import net.minestom.server.item.Material
 import net.minestom.server.network.packet.server.play.BlockActionPacket
 import net.minestom.server.network.packet.server.play.EntitySoundEffectPacket
 import net.minestom.server.network.packet.server.play.TeamsPacket
@@ -54,26 +63,38 @@ import net.minestom.server.tag.Tag
 import net.minestom.server.utils.Direction
 import net.minestom.server.utils.NamespaceID
 import net.minestom.server.utils.time.TimeUnit
+import org.tinylog.kotlin.Logger
 import world.cepi.kstom.Manager
+import world.cepi.kstom.adventure.noItalic
 import world.cepi.kstom.event.listenOnly
 import world.cepi.kstom.util.asPos
+import world.cepi.kstom.util.asVec
+import world.cepi.kstom.util.sendBreakBlockEffect
 import world.cepi.particle.Particle
 import world.cepi.particle.ParticleType
 import world.cepi.particle.data.OffsetAndSpeed
 import world.cepi.particle.showParticle
-import java.nio.file.Path
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.io.path.inputStream
 import kotlin.math.ceil
 import kotlin.math.floor
 
 class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
     companion object {
+        const val rushChanceIncrease = 0.10
+        const val eyesChanceIncrease = 0.003
+
+        const val seekSchemNumber = 3
+        const val librarySchemNumber = 49
+        const val endingSchemNumber = 49
+
+        const val rushRange = 10.0
+        const val maxLoadedRooms = 8
+
         val team = Manager.team.createBuilder("everyone")
             .teamColor(NamedTextColor.WHITE)
             .collisionRule(TeamsPacket.CollisionRule.NEVER)
@@ -106,10 +127,6 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
         val hidingTag = Tag.Boolean("hiding")
 
-        const val doorRange = 3.6
-        const val rushRange = 10.0
-        const val maxLoadedRooms = 8
-
         fun applyDoor(game: DoorsGame, batch: AbsoluteBlockBatch, doorSchem: SpongeSchematic, doorPos: Point, direction: Direction, instance: Instance) {
             doorSchem.apply { x, y, z, block ->
                 val rotatedBlock = applyRotationToBlock(doorPos, x, y, z, block, direction, doorSchem)
@@ -130,7 +147,8 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
     override var spawnPosition = Pos(0.5, 0.0, 0.5, 180f, 0f)
 
-
+    // Mutable for seek, door range increases to prevent ping issues
+    var doorRange = 3.6
 
     val roomNum = AtomicInteger(-1)
 
@@ -153,6 +171,13 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
     private val generatingRoom = AtomicBoolean(false)
 
+    private val seekSequence = AtomicBoolean(false)
+
+    // Stops generating new rooms at doors and instead simply opens them.
+    // This is for the rooms 49, 50, 51; 99 and 100; and the seek chases
+    private val stopGenerating = AtomicBoolean(false)
+    private val stopGeneratingDoors = CopyOnWriteArraySet<Point>()
+
     private var doorOpenSecondsLeft = AtomicInteger(30)
     private var doorTimerHologram = MultilineHologramAEC(mutableListOf(Component.text(doorOpenSecondsLeft.get(), NamedTextColor.GOLD)))
     private var doorTask: ExecutorRunnable? = null
@@ -163,14 +188,33 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
 
     init {
-        val startingSchematic = SpongeSchematic()
-        startingSchematic.read(Path.of("startingroom.schem").inputStream())
 
         val lobbyRoom = Room(this, instance.get()!!, Pos(0.5, 0.0, 0.5, 180f, 0f), Direction.NORTH)
 
-        lobbyRoom.applyRoom(listOf(startingSchematic))?.thenRun {
+        Logger.info("Pasting lobby room")
+
+        lobbyRoom.applyRoom(listOf(startingSchem))?.thenRun {
+            Logger.info("Completed future")
             readyFuture.complete(null)
         }
+        lobbyRoom.keyRoom = true
+
+        val itemFrameEntity = Entity(EntityType.GLOW_ITEM_FRAME)
+        val meta = itemFrameEntity.entityMeta as GlowItemFrameMeta
+        itemFrameEntity.setNoGravity(true)
+        itemFrameEntity.isInvisible = true
+        itemFrameEntity.setCustomSynchronizationCooldown(Duration.ofDays(1))
+        meta.orientation = ItemFrameMeta.Orientation.SOUTH
+        meta.item = ItemStack.builder(Material.TRIPWIRE_HOOK)
+            .displayName(Component.text("Room Key 1", NamedTextColor.GOLD).noItalic())
+            .meta {
+                it.canPlaceOn(Block.IRON_DOOR)
+            }
+            .build()
+        itemFrameEntity.setInstance(instance, Pos(-2.0, 2.0, -18.0))
+
+        lobbyRoom.entityIds.add(itemFrameEntity.entityId)
+
         rooms.add(lobbyRoom)
     }
 
@@ -268,13 +312,15 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
     override fun registerEvents() {
         eventNode.listenOnly<PlayerMoveEvent> {
-            val closestPlayerToDoor = players.minBy { it.position.distanceSquared(activeDoorPosition) }
 
-            if (closestPlayerToDoor.uuid == player.uuid) return@listenOnly
-
-            val distanceToPlayer = closestPlayerToDoor.getDistanceSquared(player)
-
-            player.getAttribute(Attribute.MOVEMENT_SPEED).baseValue = 0.1f + if (distanceToPlayer > 25*25) 0.2f else 0f
+            // TODO: Rework
+//            val closestPlayerToDoor = players.minBy { it.position.distanceSquared(activeDoorPosition) }
+//
+//            if (closestPlayerToDoor.uuid == player.uuid) return@listenOnly
+//
+//            val distanceToPlayer = closestPlayerToDoor.getDistanceSquared(player)
+//
+//            player.getAttribute(Attribute.MOVEMENT_SPEED).baseValue = 0.1f + if (distanceToPlayer > 25*25) 0.2f else 0f
 
             if (player.hasTag(hidingTag)) {
                 isCancelled = true
@@ -292,9 +338,57 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                 isCancelled = true
             }
 
+            if (message == "spec") {
+                player.gameMode = GameMode.SPECTATOR
+            }
+
+            if (message == "unspec") {
+                player.gameMode = GameMode.ADVENTURE
+            }
+
             if (message == "rushhhh") {
                 spawnRush(instance)
                 isCancelled = true
+            }
+        }
+
+        eventNode.listenOnly<PlayerEntityInteractEvent> {
+            if (target.entityType == EntityType.PAINTING) {
+                val motive = (target.entityMeta as PaintingMeta).motive
+                player.sendActionBar(Component.text("That painting is called \"${motive.name.lowercase()}\""))
+                player.playSound(Sound.sound(SoundEvent.ENTITY_ITEM_PICKUP, Sound.Source.MASTER, 1f, 1f), Sound.Emitter.self())
+            }
+
+            if (target.entityType == EntityType.GLOW_ITEM_FRAME) {
+                // Do not give key twice
+                if (player.inventory.itemStacks.any { it.material() == Material.TRIPWIRE_HOOK }) return@listenOnly
+
+                val item = (target.entityMeta as GlowItemFrameMeta).item
+
+                player.inventory.addItemStack(item)
+                player.playSound(Sound.sound(SoundEvent.ITEM_ARMOR_EQUIP_LEATHER, Sound.Source.MASTER, 1f, 1.5f), Sound.Emitter.self())
+            }
+        }
+
+        eventNode.listenOnly<PlayerBlockPlaceEvent> {
+            if (player.gameMode != GameMode.ADVENTURE) {
+                isCancelled = true
+                return@listenOnly
+            }
+
+            if (block.compare(Block.TRIPWIRE_HOOK)) {
+                isCancelled = true
+
+                val blockPlacedOn = instance.getBlock(blockPosition.sub(blockFace.toDirection().offset()))
+                if (blockPlacedOn.compare(Block.IRON_DOOR)) {
+                    player.setItemInHand(hand, ItemStack.AIR)
+                    player.playSound(Sound.sound(SoundEvent.ENTITY_ITEM_BREAK, Sound.Source.MASTER, 1f, 2f), Sound.Emitter.self())
+                    generateNextRoom(instance)
+                } else {
+                    player.sendActionBar(Component.text("Use the key on the door!", NamedTextColor.RED))
+                }
+
+
             }
         }
 
@@ -331,6 +425,135 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                 closet.handleInteraction(player, blockPosition, block, instance)
             }
 
+            else if (block.compare(Block.END_STONE_BRICK_WALL)) {
+                val lastRoom = rooms.last()
+
+                val towardsScreenOff = lastRoom.direction.rotate().offset()
+                val roomPos = blockPosition.add(0.5).add(lastRoom.direction.offset().mul(10.0)).sub(towardsScreenOff.mul(4.0))
+                val numPastePos = blockPosition.add(lastRoom.direction.offset().mul(12.0)).add(towardsScreenOff.mul(5.0)).add(0.0, 4.0, 0.0)
+                val lightCenterPos = blockPosition.add(lastRoom.direction.offset().mul(8.0)).add(towardsScreenOff.mul(5.0)).add(0.0, 2.0, 0.0)
+
+                player.teleport(roomPos.asPos())
+
+                object : ExecutorRunnable(delay = Duration.ofMillis(1500), repeat = Duration.ofMillis(1200), iterations = 10, executor = executor) {
+                    val combination = (0..9).map { it to ThreadLocalRandom.current().nextBoolean() }
+
+                    override fun run() {
+                        val currentIter = currentIteration.get()
+                        val combinationPart = combination[currentIter]
+                        val batch = AbsoluteBlockBatch()
+                        val schem = numSchems[combinationPart.first]
+
+                        schem.apply { x, y, z, block ->
+                            val rotated = applyRotationToBlock(numPastePos, x, y, z, block, lastRoom.direction.rotate(), schem)
+                            batch.setBlock(rotated.first, rotated.second)
+                        }
+                        for (x in -1..1) {
+                            for (y in -1..1) {
+                                batch.setBlock(lightCenterPos.add(lastRoom.direction.offset().mul(x.toDouble())).add(0.0, y.toDouble(), 0.0), Block.REDSTONE_LAMP.withProperty("lit", combinationPart.second.toString()))
+                            }
+                        }
+
+                        batch.apply(instance) {}
+                    }
+                }
+            }
+
+            else if (block.compare(Block.LEVER)) {
+                if (block.getProperty("powered") == "true") return@listenOnly
+
+                if (roomNum.get() == endingSchemNumber) {
+                    val leverDir = Direction.valueOf(block.getProperty("facing").uppercase())
+                    val rightLeverDir = leverDir.rotate().opposite()
+
+                    instance.setBlock(blockPosition, block.withProperty("powered", "true"))
+                    instance.playSound(Sound.sound(SoundEvent.BLOCK_IRON_DOOR_OPEN, Sound.Source.MASTER, 1f, 0.6f))
+
+                    val alivePlayers = players.filter { it.gameMode == GameMode.ADVENTURE }
+
+                    val specEntity = Entity(EntityType.BOAT)
+//                    val specMeta = specEntity.entityMeta as AreaEffectCloudMeta
+//                    specMeta.radius = 0f
+                    specEntity.isInvisible = true
+                    specEntity.setNoGravity(true)
+                    specEntity.setInstance(instance, player.position)
+
+                    object : ExecutorRunnable(delay = Duration.ofMillis(650), repeat = Duration.ofMillis(1150), iterations = 3, executor = executor) {
+
+                        override fun run() {
+                            val currentIter = currentIteration.get()
+
+                            if (currentIter == 0) {
+                                // Unload previous rooms!
+
+                                rooms.iterator().forEachRemaining {
+                                    if (rooms.indexOf(it) == rooms.size - 1) return@forEachRemaining
+                                    val roomToRemove = rooms.removeAt(0)
+                                    doorPositions.remove(roomToRemove.position)
+                                    roomToRemove.lightBlocks.clear()
+                                    roomToRemove.chests.clear()
+                                    roomToRemove.entityIds.forEach {
+                                        Entity.getEntity(it)?.remove()
+                                    }
+                                    roomToRemove.entityIds.clear()
+                                }
+                                val nextRoom = rooms[0]
+
+                                instance.setBlock(nextRoom.position, Block.IRON_DOOR.withProperties(mapOf("facing" to nextRoom.direction.name.lowercase())))
+                                instance.setBlock(nextRoom.position.add(0.0, 1.0, 0.0), Block.IRON_DOOR.withProperties(mapOf("facing" to nextRoom.direction.name.lowercase(), "half" to "upper")))
+
+                                specEntity.teleport(blockPosition.add(0.5).sub(leverDir.offset()).add(rightLeverDir.offset().mul(4.5)).add(leverDir.offset().mul(4.5)).asPos().withYaw(leverDir.opposite().yaw()).withPitch(1f))
+
+                                alivePlayers.forEach {
+                                    it.gameMode = GameMode.SPECTATOR
+                                    it.spectate(specEntity)
+                                }
+                            }
+
+                            val block = instance.getBlock(blockPosition.sub(leverDir.offset()).add(rightLeverDir.offset().mul(4.0 - currentIter)))
+
+                            for (y in -1..2) {
+                                val left = blockPosition.sub(leverDir.offset()).add(rightLeverDir.offset().mul(4.0 - currentIter)).withY(blockPosition.y() + y)
+                                val right = blockPosition.sub(leverDir.offset()).add(rightLeverDir.offset().mul(5.0 + currentIter)).withY(blockPosition.y() + y)
+
+                                instance.sendBreakBlockEffect(left, Block.DIORITE_WALL)
+                                instance.sendBreakBlockEffect(right, Block.DIORITE_WALL)
+                                instance.setBlock(left, Block.AIR)
+                                instance.setBlock(right, Block.AIR)
+
+                                instance.showParticle(
+                                    Particle.particle(
+                                        type = ParticleType.CLOUD,
+                                        count = 3,
+                                        data = OffsetAndSpeed(0.1f, 0.1f, 0.1f, 0.1f)
+                                    ), left.add(0.5).asVec()
+                                )
+                                instance.showParticle(
+                                    Particle.particle(
+                                        type = ParticleType.CLOUD,
+                                        count = 3,
+                                        data = OffsetAndSpeed(0.1f, 0.1f, 0.1f, 0.1f)
+                                    ), right.add(0.5).asVec()
+                                )
+                            }
+
+                            instance.playSound(Sound.sound(SoundEvent.ENTITY_GENERIC_EXTINGUISH_FIRE, Sound.Source.MASTER, 1f, 0.7f), Sound.Emitter.self())
+                        }
+
+                        override fun cancelled() {
+                            // TODO: figure cutscene
+
+                            alivePlayers.forEach {
+                                it.teleport(specEntity.position)
+                                it.gameMode = GameMode.ADVENTURE
+                                it.stopSpectating()
+                            }
+                            specEntity.remove()
+                        }
+                    }
+                }
+            }
+
             else if (block.compare(Block.OAK_DOOR)) {
                 if (block.getProperty("open") == "true") {
                     isCancelled = true
@@ -349,7 +572,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
             else {
                 isCancelled = true
-                isBlockingItemUse = true
+//                isBlockingItemUse = true
             }
         }
 
@@ -387,19 +610,48 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                 //player.sendMessage("ALREADY GENERATING!!!!")
                 return@listenOnly
             }
+
+            // Do not open automatically if on a key room
+            if (rooms.last().keyRoom) return@listenOnly
+
+            if (stopGenerating.get()) {
+                stopGeneratingDoors.forEach {
+                    if (it.distanceSquared(player.position) < doorRange * doorRange) {
+                        val block = instance.getBlock(it)
+                        val facing = block.getProperty("facing")
+                        stopGeneratingDoors.remove(it)
+                        if (facing == null) {
+                            println("Facing was null")
+                            return@forEach
+                        }
+                        generateNextRoom(instance)
+
+                        instance.playSound(Sound.sound(Key.key("custom.door.open"), Sound.Source.MASTER, 0.8f, 1f), it)
+
+                        instance.setBlock(it, Block.IRON_DOOR.withProperties(mapOf("open" to "true", "facing" to facing, "half" to "lower")))
+                        instance.setBlock(it.add(0.0, 1.0, 0.0), Block.IRON_DOOR.withProperties(mapOf("open" to "true", "facing" to facing, "half" to "upper")))
+                    }
+                }
+
+                return@listenOnly
+            }
+
             val distanceToDoor = player.position.distanceSquared(activeDoorPosition)
 
             if (distanceToDoor < doorRange * doorRange) {
                 generateNextRoom(instance)
             }
         }
+
+        eventNode.listenOnly<InventoryPreClickEvent> {
+            if ((41..44).contains(slot)) {
+                isCancelled = true
+            }
+        }
+        eventNode.cancel<ItemDropEvent>()
     }
 
     private fun kill(player: Player, killer: DoorsEntity) {
-//        sendMessage(
-//            Component.text("")
-//        )
-
         player.gameMode = GameMode.SPECTATOR
         player.isInvisible = true
 
@@ -501,31 +753,122 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
     }
 
-    private fun generateNextRoom(instance: Instance) {
+    private fun generateNextRoom(instance: Instance, openDoor: Boolean = true): CompletableFuture<Void>? {
+        if (stopGenerating.get()) {
+            // End seek sequence
+            if (seekSequence.get() && stopGeneratingDoors.isEmpty()) {
+                val alivePlayers = players.filter { it.gameMode == GameMode.ADVENTURE }
+
+                stopGeneratingDoors.clear()
+                stopGenerating.set(false)
+                seekSequence.set(false)
+
+                doorRange = 3.6
+
+                alivePlayers.forEach {
+                    it.leggings = ItemStack.AIR
+                    it.isAutoViewable = true
+                    it.getAttribute(Attribute.MOVEMENT_SPEED).baseValue = 0.1f
+                }
+
+                generateNextRoom(instance)
+            }
+
+            return null
+        }
+
         val oldActiveDoor = activeDoorPosition
         val newRoomEntryPos = activeDoorPosition.add(activeDoorDirection.offset())
+
+        // Begin seek sequence
+        if (roomNum.get() == seekSchemNumber && !seekSequence.get()) { // If the last room was the seek hallway, begin sequence when the player attempts to open the door
+            // TODO: animation
+
+            val alivePlayers = players.filter { it.gameMode == GameMode.ADVENTURE }
+
+            val leggingsItem = ItemStack.builder(Material.LEATHER_LEGGINGS)
+                .meta {
+                    it.enchantment(Enchantment.SWIFT_SNEAK, 1)
+                }
+                .build()
+            alivePlayers.forEach {
+                it.leggings = leggingsItem
+                it.isAutoViewable = false
+                it.getAttribute(Attribute.MOVEMENT_SPEED).baseValue = 0.15f
+            }
+            doorRange = 5.0
+
+            seekSequence.set(true)
+
+            stopGeneratingDoors.clear()
+            stopGeneratingDoors.add(activeDoorPosition)
+
+            CoroutineScope(Dispatchers.IO).launch {
+                repeat(5) {
+                    generateNextRoom(instance, false)?.join()
+                    stopGeneratingDoors.add(activeDoorPosition)
+                }
+
+                stopGenerating.set(true)
+            }
+
+            return null
+        }
 
         generatingRoom.set(true)
 
         val newRoom = Room(this@DoorsGame, instance, newRoomEntryPos, activeDoorDirection)
 
-        val applyRoom = newRoom.applyRoom()
+        var customRoom = true
+        val applyRoom = when (roomNum.get()) {
+            endingSchemNumber -> {
+                stopGenerating.set(true)
+                newRoom.applyRoom(listOf(endingSchem))
+            }
+
+            // Seek
+            seekSchemNumber -> newRoom.applyRoom(listOf(schematics.first { it.name == "largehallway" }), force = true)
+            seekSchemNumber + 1 -> newRoom.applyRoom(seekSchematics.filter { it.name.startsWith("seekhallway") }, force = true)
+            seekSchemNumber + 2 -> newRoom.applyRoom(seekSchematics.filter { it.name.startsWith("seekcross") }, force = true)
+            seekSchemNumber + 3 -> newRoom.applyRoom(listOf(seekSchematics.first { it.name == "seekhallwayshort"}), force = true)
+            seekSchemNumber + 4 -> newRoom.applyRoom(seekSchematics.filter { it.name.startsWith("seekcross") }, force = true)
+            seekSchemNumber + 5 -> newRoom.applyRoom(seekSchematics.filter { it.name.startsWith("seekhallway") }, force = true)
+
+
+            else -> {
+                customRoom = false
+                newRoom.applyRoom()
+            }
+        }
+
+        if (customRoom) {
+
+            newRoom.darkRoom = false
+        }
+
+        if (newRoom.darkRoom) {
+            // Play dark ambiance
+            playSound(Sound.sound(Key.key("music.ambiance.dark"), Sound.Source.MASTER, 1f, 1f), Sound.Emitter.self())
+        }
 
         if (applyRoom == null) {
             //player.sendMessage("No room")
             generatingRoom.set(false)
             roomNum.decrementAndGet()
-            return
+            return null
         }
 
         applyRoom.thenRun {
-            val bottomBlock = instance.getBlock(oldActiveDoor)
-            instance.setBlock(oldActiveDoor, bottomBlock.withProperty("open", "true"))
+            if (openDoor) {
+                val bottomBlock = instance.getBlock(oldActiveDoor)
+                instance.setBlock(oldActiveDoor, bottomBlock.withProperty("open", "true"))
 
-            val topBlock = instance.getBlock(oldActiveDoor.add(0.0, 1.0, 0.0))
-            instance.setBlock(oldActiveDoor.add(0.0, 1.0, 0.0), topBlock.withProperties(mapOf("open" to "true", "half" to "upper")))
+                val topBlock = instance.getBlock(oldActiveDoor.add(0.0, 1.0, 0.0))
+                instance.setBlock(oldActiveDoor.add(0.0, 1.0, 0.0), topBlock.withProperties(mapOf("open" to "true", "half" to "upper")))
 
-            instance.playSound(Sound.sound(Key.key("custom.door.open"), Sound.Source.MASTER, 0.8f, 1f), oldActiveDoor)
+                instance.playSound(Sound.sound(Key.key("custom.door.open"), Sound.Source.MASTER, 0.8f, 1f), oldActiveDoor)
+            }
+
             generatingRoom.set(false)
         }
 
@@ -534,19 +877,16 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
         // Unload previous rooms
         if (rooms.size >= maxLoadedRooms) {
             val roomToRemove = rooms.removeAt(0)
-            val nextRoom = rooms[1]
+            val nextRoom = rooms[0]
 
             doorPositions.remove(roomToRemove.position)
 
             roomToRemove.lightBlocks.clear()
             roomToRemove.chests.clear()
-            roomToRemove.removalBatch?.apply(instance) {
-                //player.sendMessage("next room: ${nextRoom.position}")
-                instance.setBlock(nextRoom.position, Block.IRON_DOOR.withProperties(mapOf("facing" to nextRoom.direction.name.lowercase())))
-                instance.setBlock(nextRoom.position.add(0.0, 1.0, 0.0), Block.IRON_DOOR.withProperties(mapOf("facing" to nextRoom.direction.name.lowercase(), "half" to "upper")))
 
-            }
-            roomToRemove.removalBatch = null
+            instance.setBlock(nextRoom.position, Block.IRON_DOOR.withProperties(mapOf("facing" to nextRoom.direction.name.lowercase())))
+            instance.setBlock(nextRoom.position.add(0.0, 1.0, 0.0), Block.IRON_DOOR.withProperties(mapOf("facing" to nextRoom.direction.name.lowercase(), "half" to "upper")))
+
             roomToRemove.entityIds.forEach {
                 Entity.getEntity(it)?.remove()
             }
@@ -554,12 +894,11 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
         }
 
         // Only begin allowing entity spawns above or on room 5
-        run chances@{ if (roomNum.get() >= 5) {
-            rushChance += 0.10 // 10% per room
-            eyesChance += 0.003 // 0.3% per room
-
-            instance.sendMessage(Component.text("rush chance: ${rushChance}"))
-            instance.sendMessage(Component.text("eyes chance: ${eyesChance}"))
+        // and if the room is not dark
+        // and if it is not a scripted room
+        if (!customRoom) run chances@{ if (roomNum.get() >= 5 && !newRoom.darkRoom) {
+            rushChance += rushChanceIncrease // 10% per room
+            eyesChance += eyesChanceIncrease // 0.3% per room
 
             // Roll
             val random = ThreadLocalRandom.current()
@@ -567,12 +906,12 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
             if (random.nextDouble() <= rushChance) {
                 // If room does not have atleast 2 closets
                 if (newRoom.closets < 2) {
-                    instance.sendMessage(Component.text("Attempted rush, no closets (${newRoom.closets})"))
                     // guarantee rush for next available room
                     rushChance = 1.0
                 } else {
                     spawnRush(instance)
-                    rushChance = 0.0
+                    // reset to slightly below 0.0 to fix consecutive encounters
+                    rushChance = -rushChanceIncrease
                 }
 
                 return@chances
@@ -591,28 +930,38 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                 return@chances
             }
         } }
+
+        return applyRoom
     }
 
     fun flickerLights(instance: Instance) {
         val lights = rooms.last().lightBlocks.toMutableList()
 
         if (lights.isNotEmpty()) {
-            object : ExecutorRunnable(repeat = Duration.ofMillis(200), iterations = 8, executor = executor) {
+            object : ExecutorRunnable(repeat = Duration.ofMillis(50), iterations = 40, executor = executor) {
                 var lightBreakIndex = 0
                 var loopIndex = 0
+                var nextFlicker = 0
 
                 override fun run() {
-                    val index = lightBreakIndex % lights.size
-                    val light = lights[index]
-                    val prevLight = lights[if (index == 0) lights.size - 1 else index - 1]
+                    val currentIter = currentIteration.get()
 
-                    instance.setBlock(light.first, Block.AIR)
-                    instance.setBlock(prevLight.first, prevLight.second)
+                    if (currentIter == nextFlicker) {
+                        lightBreakIndex++
 
-                    instance.playSound(Sound.sound(Key.key("custom.light.zap"), Sound.Source.MASTER, 2f, 1f), light.first)
+                        val index = lightBreakIndex % lights.size
+                        val light = lights[index]
+                        val prevLight = lights[if (index == 0) lights.size - 1 else index - 1]
+
+                        instance.setBlock(light.first, Block.AIR)
+                        instance.setBlock(prevLight.first, prevLight.second)
+
+                        instance.playSound(Sound.sound(Key.key("custom.light.zap"), Sound.Source.MASTER, 2f, 1f), light.first)
+
+                        nextFlicker = currentIter + ThreadLocalRandom.current().nextInt(1, 5)
+                    }
 
                     loopIndex++
-                    lightBreakIndex++
                 }
             }
         }
@@ -683,7 +1032,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                 override fun run() {
                     if (!playedSound && entity.position.distanceSquared(doorPoses.last()) < 80 * 80) {
                         playedSound = true
-                        val packet = EntitySoundEffectPacket(SoundEvent.ENTITY_ZOMBIE_DEATH.id(), Sound.Source.MASTER, entity.entityId, 100f, 1f, 0)
+                        val packet = EntitySoundEffectPacket(SoundEvent.ENTITY_ZOMBIE_DEATH.id(), Sound.Source.MASTER, entity.entityId, 5f, 1f, 0)
                         instance.sendGroupedPacket(packet)
                     }
 
@@ -741,8 +1090,9 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
                                         val light = lights[lightBreakIndex]
 
+                                        val rand = ThreadLocalRandom.current()
                                         //player.sendMessage("Broke light")
-                                        instance.playSound(Sound.sound(Key.key("custom.light.break"), Sound.Source.MASTER, 0.2f, 1f), light.first)
+                                        instance.playSound(Sound.sound(SoundEvent.BLOCK_GLASS_BREAK, Sound.Source.MASTER, 2f, rand.nextFloat(0.8f, 1.5f)), entity.position)
 
                                         lightBreakIndex++
                                         if (lightBreakIndex >= lights.size) {
@@ -895,6 +1245,9 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                 bossBarMap[player.uuid] = coinBar.copy(knobs = coinBar.knobs + knobsIncrease, gold = coinBar.gold + goldIncrease)
             }
         }
+    }
+
+    override fun victory(winningPlayers: Collection<Player>) {
     }
 
     override fun instanceCreate(): Instance {

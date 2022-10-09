@@ -17,14 +17,19 @@ object CreditsCommand : Command("credits") {
                 Component.text()
                     .append(Component.text(centerText("Credits", true), NamedTextColor.LIGHT_PURPLE, TextDecoration.BOLD))
 
-                    .append(Component.text("\n\n  Building", TextColor.fromHexString("#FFF3DE")))
-                    .append(Component.text("\n - emortal", NamedTextColor.GRAY))
-                    .append(Component.text("\n - DasLixou", NamedTextColor.GRAY))
-
                     .append(Component.text("\n\n  Development", TextColor.fromHexString("#FFF3DE")))
-                    .append(Component.text("\n - emortal", NamedTextColor.GRAY))
+                    .append(Component.text("\n - emortaldev", NamedTextColor.GRAY))
                     .append(Component.text("\n - DasLixou", NamedTextColor.GRAY))
 
+                    .append(Component.text("\n\n  Building", TextColor.fromHexString("#FFF3DE")))
+                    .append(Component.text("\n - emortaldev", NamedTextColor.GRAY))
+                    .append(Component.text("\n - DasLixou", NamedTextColor.GRAY))
+                    .append(Component.text("\n - Spaghetti_InSpace", NamedTextColor.GRAY))
+                    .append(Component.text("\n - ufwcam", NamedTextColor.GRAY))
+                    .append(Component.text("\n - Hazardcake", NamedTextColor.GRAY))
+                    .append(Component.text("\n - W_MNQ", NamedTextColor.GRAY))
+
+                    .append(Component.text("\n\n  Misc", TextColor.fromHexString("#FFF3DE")))
                     .append(Component.text("\n - the pog fish (resource pack help)", NamedTextColor.GRAY))
 
                     .append(Component.text("\n\n  Donators ❤", NamedTextColor.LIGHT_PURPLE))

@@ -39,7 +39,7 @@ class ChestHandler(val game: DoorsGame, val position: Point) : BlockHandler {
                     return@addInventoryCondition
                 }
 
-                 if (clickedItem.material() != Material.AIR) {
+                 if (ChestLoot.coinTypes.contains(clickedItem.material())) {
                      player.playSound(Sound.sound(Key.key("currency.gold.increase"), Sound.Source.MASTER, 1f, 1f), Sound.Emitter.self())
 
                      inventoryConditionResult.isCancel = true

@@ -32,6 +32,8 @@ object ChestLoot {
         }
     }
 
+    val coinTypes = listOf(Material.DIAMOND, Material.GOLD_INGOT, Material.SUNFLOWER)
+
     val lootList = listOf(
         // Coins
         { probability(10.0) { ItemStack.of(Material.DIAMOND) } },

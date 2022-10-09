@@ -5,10 +5,12 @@ import dev.emortal.doors.Main.Companion.configPath
 import dev.emortal.doors.Main.Companion.doorsConfig
 import dev.emortal.doors.block.SignHandler
 import dev.emortal.doors.commands.CreditsCommand
+import dev.emortal.doors.commands.DonateCommand
 import dev.emortal.doors.config.DoorsConfig
 import dev.emortal.doors.game.DoorsGame
 import dev.emortal.doors.lobby.DoorsLobby
 import dev.emortal.doors.pathfinding.rotate
+import dev.emortal.doors.schematic.RoomSchematic
 import dev.emortal.immortal.ImmortalExtension
 import dev.emortal.immortal.config.ConfigHelper
 import dev.emortal.immortal.config.GameOptions
@@ -49,6 +51,7 @@ import java.util.stream.Collectors
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.inputStream
 import kotlin.io.path.isDirectory
+import kotlin.io.path.nameWithoutExtension
 
 
 fun Instance.relight(position: Pos) {
@@ -66,6 +69,17 @@ fun Instance.relight(position: Pos) {
     }
 }
 
+val numSchems = Files.list(Path.of("./numbers/"))
+    .filter { !it.isDirectory() }
+    .collect(Collectors.toSet()).map {
+        val schem = SpongeSchematic()
+        schem.read(it.inputStream())
+
+        Logger.info("Reading number ${it}")
+
+        schem
+    }
+
 val schematics = Files.list(Path.of("./rooms/"))
     .filter { !it.isDirectory() }
     .collect(Collectors.toSet()).map {
@@ -74,12 +88,30 @@ val schematics = Files.list(Path.of("./rooms/"))
 
         Logger.info("Reading schematic ${it}")
 
-        schem
+        RoomSchematic(schem, it.nameWithoutExtension)
+    }
+
+val seekSchematics = Files.list(Path.of("./rooms/seek/"))
+    .filter { !it.isDirectory() }
+    .collect(Collectors.toSet()).map {
+        val schem = SpongeSchematic()
+        schem.read(it.inputStream())
+
+        Logger.info("Reading seek schematic ${it}")
+
+        RoomSchematic(schem, it.nameWithoutExtension)
     }
 
 val doorSchem = SpongeSchematic().also {
     it.read(Path.of("./doordesign.schem").inputStream())
 }
+
+val startingSchem = RoomSchematic(SpongeSchematic().also {
+    it.read(Path.of("./startingroom.schem").inputStream())
+}, "roomstarting")
+val endingSchem = RoomSchematic(SpongeSchematic().also {
+    it.read(Path.of("./roomending.schem").inputStream())
+}, "roomending")
 
 /**
  * @return New position and block
@@ -191,7 +223,7 @@ fun main() {
     // Automatically refresh config
     val watchDirectory = Path.of("./")
     val watchService = FileSystems.getDefault().newWatchService()
-    val pathKey = watchDirectory.register(watchService, StandardWatchEventKinds.ENTRY_CREATE,
+    watchDirectory.register(watchService, StandardWatchEventKinds.ENTRY_CREATE,
         StandardWatchEventKinds.ENTRY_MODIFY, StandardWatchEventKinds.ENTRY_DELETE)
 
     CoroutineScope(Dispatchers.IO).launch {
@@ -215,7 +247,6 @@ fun main() {
     }
 
     val minecraftServer = MinecraftServer.init()
-    val instanceManager = Manager.instance
     val global = Manager.globalEvent
 
     System.setProperty("debug", "true")
@@ -292,6 +323,7 @@ fun main() {
 
     StopCommand.register()
     CreditsCommand.register()
+    DonateCommand.register()
 
     minecraftServer.start(address, port)
 }

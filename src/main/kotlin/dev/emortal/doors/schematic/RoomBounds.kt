@@ -1,4 +1,4 @@
-package dev.emortal.doors.util
+package dev.emortal.doors.schematic
 
 import net.minestom.server.coordinate.Point
 import net.minestom.server.coordinate.Vec
