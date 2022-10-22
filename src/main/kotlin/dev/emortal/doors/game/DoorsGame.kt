@@ -6,10 +6,7 @@ import dev.emortal.doors.damage.DoorsEntity
 import dev.emortal.doors.damage.EyesDamage
 import dev.emortal.doors.damage.HideDamage
 import dev.emortal.doors.damage.RushDamage
-import dev.emortal.doors.pathfinding.RushPathfinding
-import dev.emortal.doors.pathfinding.offset
-import dev.emortal.doors.pathfinding.rotate
-import dev.emortal.doors.pathfinding.yaw
+import dev.emortal.doors.pathfinding.*
 import dev.emortal.doors.raycast.RaycastUtil
 import dev.emortal.doors.util.MultilineHologramAEC
 import dev.emortal.doors.util.lerp
@@ -19,10 +16,11 @@ import dev.emortal.immortal.util.ExecutorRunnable
 import dev.emortal.immortal.util.cancel
 import dev.emortal.immortal.util.expInterp
 import dev.emortal.immortal.util.setInstance
-import dev.hypera.scaffolding.schematic.impl.SpongeSchematic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import net.hollowcube.util.schem.Rotation
+import net.hollowcube.util.schem.Schematic
 import net.kyori.adventure.bossbar.BossBar
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.sound.Sound
@@ -63,7 +61,6 @@ import net.minestom.server.tag.Tag
 import net.minestom.server.utils.Direction
 import net.minestom.server.utils.NamespaceID
 import net.minestom.server.utils.time.TimeUnit
-import org.tinylog.kotlin.Logger
 import world.cepi.kstom.Manager
 import world.cepi.kstom.adventure.noItalic
 import world.cepi.kstom.event.listenOnly
@@ -127,21 +124,14 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
         val hidingTag = Tag.Boolean("hiding")
 
-        fun applyDoor(game: DoorsGame, batch: AbsoluteBlockBatch, doorSchem: SpongeSchematic, doorPos: Point, direction: Direction, instance: Instance) {
-            doorSchem.apply { x, y, z, block ->
-                val rotatedBlock = applyRotationToBlock(doorPos, x, y, z, block, direction, doorSchem)
-
+        fun applyDoor(batch: AbsoluteBlockBatch, doorSchem: Schematic, doorPos: Point, rotation: Rotation) {
+            doorSchem.apply(rotation) { pos, block ->
                 if (block.compare(Block.DARK_OAK_DOOR)) {
-                    batch.setBlock(
-                        rotatedBlock.first,
-                        Block.IRON_DOOR.withProperties(rotatedBlock.second.properties())
-                    )
+                    batch.setBlock(pos.add(doorPos), Block.IRON_DOOR.withProperties(block.properties()))
                 } else {
-                    batch.setBlock(rotatedBlock.first, rotatedBlock.second)
+                    batch.setBlock(pos.add(doorPos), block)
                 }
             }
-
-
         }
     }
 
@@ -164,7 +154,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
     val rooms = CopyOnWriteArrayList<Room>()
     val playerChestMap = ConcurrentHashMap<UUID, Point>()
 
-    var activeDoorDirection: Direction = Direction.NORTH
+    var activeDoorRotation: Rotation = Rotation.NONE
     var activeDoorPosition: Point = Vec(8.0, 0.0, -19.0)
 
     private lateinit var rushPathfinding: RushPathfinding
@@ -189,12 +179,9 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
     init {
 
-        val lobbyRoom = Room(this, instance.get()!!, Pos(0.5, 0.0, 0.5, 180f, 0f), Direction.NORTH)
-
-        Logger.info("Pasting lobby room")
+        val lobbyRoom = Room(this, instance.get()!!, Pos(0.5, 0.0, 0.5, 180f, 0f), Rotation.NONE)
 
         lobbyRoom.applyRoom(listOf(startingSchem))?.thenRun {
-            Logger.info("Completed future")
             readyFuture.complete(null)
         }
         lobbyRoom.keyRoom = true
@@ -428,10 +415,10 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
             else if (block.compare(Block.END_STONE_BRICK_WALL)) {
                 val lastRoom = rooms.last()
 
-                val towardsScreenOff = lastRoom.direction.rotate().offset()
-                val roomPos = blockPosition.add(0.5).add(lastRoom.direction.offset().mul(10.0)).sub(towardsScreenOff.mul(4.0))
-                val numPastePos = blockPosition.add(lastRoom.direction.offset().mul(12.0)).add(towardsScreenOff.mul(5.0)).add(0.0, 4.0, 0.0)
-                val lightCenterPos = blockPosition.add(lastRoom.direction.offset().mul(8.0)).add(towardsScreenOff.mul(5.0)).add(0.0, 2.0, 0.0)
+                val towardsScreenOff = lastRoom.rotation.rotate(Rotation.CLOCKWISE_90).offset()
+                val roomPos = blockPosition.add(0.5).add(lastRoom.rotation.offset().mul(10.0)).sub(towardsScreenOff.mul(4.0))
+                val numPastePos = blockPosition.add(lastRoom.rotation.offset().mul(12.0)).add(towardsScreenOff.mul(5.0)).add(0.0, 4.0, 0.0)
+                val lightCenterPos = blockPosition.add(lastRoom.rotation.offset().mul(8.0)).add(towardsScreenOff.mul(5.0)).add(0.0, 2.0, 0.0)
 
                 player.teleport(roomPos.asPos())
 
@@ -444,13 +431,12 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                         val batch = AbsoluteBlockBatch()
                         val schem = numSchems[combinationPart.first]
 
-                        schem.apply { x, y, z, block ->
-                            val rotated = applyRotationToBlock(numPastePos, x, y, z, block, lastRoom.direction.rotate(), schem)
-                            batch.setBlock(rotated.first, rotated.second)
+                        schem.apply(lastRoom.rotation.rotate(Rotation.CLOCKWISE_90)) { pos, block ->
+                            batch.setBlock(pos, block)
                         }
                         for (x in -1..1) {
                             for (y in -1..1) {
-                                batch.setBlock(lightCenterPos.add(lastRoom.direction.offset().mul(x.toDouble())).add(0.0, y.toDouble(), 0.0), Block.REDSTONE_LAMP.withProperty("lit", combinationPart.second.toString()))
+                                batch.setBlock(lightCenterPos.add(lastRoom.rotation.offset().mul(x.toDouble())).add(0.0, y.toDouble(), 0.0), Block.REDSTONE_LAMP.withProperty("lit", combinationPart.second.toString()))
                             }
                         }
 
@@ -499,8 +485,8 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                                 }
                                 val nextRoom = rooms[0]
 
-                                instance.setBlock(nextRoom.position, Block.IRON_DOOR.withProperties(mapOf("facing" to nextRoom.direction.name.lowercase())))
-                                instance.setBlock(nextRoom.position.add(0.0, 1.0, 0.0), Block.IRON_DOOR.withProperties(mapOf("facing" to nextRoom.direction.name.lowercase(), "half" to "upper")))
+                                instance.setBlock(nextRoom.position, Block.IRON_DOOR.withProperties(mapOf("facing" to nextRoom.rotation.asDirection().name.lowercase())))
+                                instance.setBlock(nextRoom.position.add(0.0, 1.0, 0.0), Block.IRON_DOOR.withProperties(mapOf("facing" to nextRoom.rotation.asDirection().name.lowercase(), "half" to "upper")))
 
                                 specEntity.teleport(blockPosition.add(0.5).sub(leverDir.offset()).add(rightLeverDir.offset().mul(4.5)).add(leverDir.offset().mul(4.5)).asPos().withYaw(leverDir.opposite().yaw()).withPitch(1f))
 
@@ -682,7 +668,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                         player.playSound(Sound.sound(Key.key("music.guidinglight"), Sound.Source.MASTER, 0.6f, 1f), Sound.Emitter.self())
                     }
                     if (currentIter % ticksPerMessage == 0) {
-                        val currentMessage = messages[(currentIter.toDouble() / 80.0).toInt()]
+                        val currentMessage = messages[(currentIter.toDouble() / ticksPerMessage).toInt()]
 
                         player.showTitle(
                             Title.title(
@@ -778,7 +764,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
         }
 
         val oldActiveDoor = activeDoorPosition
-        val newRoomEntryPos = activeDoorPosition.add(activeDoorDirection.offset())
+        val newRoomEntryPos = activeDoorPosition.add(activeDoorRotation.offset())
 
         // Begin seek sequence
         if (roomNum.get() == seekSchemNumber && !seekSequence.get()) { // If the last room was the seek hallway, begin sequence when the player attempts to open the door
@@ -817,7 +803,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
         generatingRoom.set(true)
 
-        val newRoom = Room(this@DoorsGame, instance, newRoomEntryPos, activeDoorDirection)
+        val newRoom = Room(this@DoorsGame, instance, newRoomEntryPos, activeDoorRotation)
 
         var customRoom = true
         val applyRoom = when (roomNum.get()) {
@@ -827,12 +813,12 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
             }
 
             // Seek
-            seekSchemNumber -> newRoom.applyRoom(listOf(schematics.first { it.name == "largehallway" }), force = true)
-            seekSchemNumber + 1 -> newRoom.applyRoom(seekSchematics.filter { it.name.startsWith("seekhallway") }, force = true)
-            seekSchemNumber + 2 -> newRoom.applyRoom(seekSchematics.filter { it.name.startsWith("seekcross") }, force = true)
-            seekSchemNumber + 3 -> newRoom.applyRoom(listOf(seekSchematics.first { it.name == "seekhallwayshort"}), force = true)
-            seekSchemNumber + 4 -> newRoom.applyRoom(seekSchematics.filter { it.name.startsWith("seekcross") }, force = true)
-            seekSchemNumber + 5 -> newRoom.applyRoom(seekSchematics.filter { it.name.startsWith("seekhallway") }, force = true)
+            seekSchemNumber -> newRoom.applyRoom(listOf(schematics.first { it.name == "largehallway" }))
+            seekSchemNumber + 1 -> newRoom.applyRoom(seekSchematics.filter { it.name.startsWith("seekhallway") })
+            seekSchemNumber + 2 -> newRoom.applyRoom(seekSchematics.filter { it.name.startsWith("seekcross") })
+            seekSchemNumber + 3 -> newRoom.applyRoom(listOf(seekSchematics.first { it.name == "seekshorthallway"}))
+            seekSchemNumber + 4 -> newRoom.applyRoom(seekSchematics.filter { it.name.startsWith("seekcross") })
+            seekSchemNumber + 5 -> newRoom.applyRoom(seekSchematics.filter { it.name.startsWith("seekhallway") })
 
 
             else -> {
@@ -884,8 +870,8 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
             roomToRemove.lightBlocks.clear()
             roomToRemove.chests.clear()
 
-            instance.setBlock(nextRoom.position, Block.IRON_DOOR.withProperties(mapOf("facing" to nextRoom.direction.name.lowercase())))
-            instance.setBlock(nextRoom.position.add(0.0, 1.0, 0.0), Block.IRON_DOOR.withProperties(mapOf("facing" to nextRoom.direction.name.lowercase(), "half" to "upper")))
+            instance.setBlock(nextRoom.position, Block.IRON_DOOR.withProperties(mapOf("facing" to nextRoom.rotation.asDirection().name.lowercase())))
+            instance.setBlock(nextRoom.position.add(0.0, 1.0, 0.0), Block.IRON_DOOR.withProperties(mapOf("facing" to nextRoom.rotation.asDirection().name.lowercase(), "half" to "upper")))
 
             roomToRemove.entityIds.forEach {
                 Entity.getEntity(it)?.remove()
@@ -1032,7 +1018,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                 override fun run() {
                     if (!playedSound && entity.position.distanceSquared(doorPoses.last()) < 80 * 80) {
                         playedSound = true
-                        val packet = EntitySoundEffectPacket(SoundEvent.ENTITY_ZOMBIE_DEATH.id(), Sound.Source.MASTER, entity.entityId, 5f, 1f, 0)
+                        val packet = EntitySoundEffectPacket(SoundEvent.ENTITY_ZOMBIE_DEATH.id(), Sound.Source.MASTER, entity.entityId, 4f, 1f, 0)
                         instance.sendGroupedPacket(packet)
                     }
 
@@ -1134,7 +1120,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
         val roomNumberOnSpawn = roomNum.get()
 
         val lastRoom = rooms.last()
-        val lastRoomBounds = lastRoom.schematic.bounds(lastRoom.position, lastRoom.direction)
+        val lastRoomBounds = lastRoom.schematic.bounds(lastRoom.position, lastRoom.rotation)
 
         var startPos = lastRoomBounds.bottomRight.lerp(lastRoomBounds.topLeft, 0.5).asPosition()
 

@@ -9,29 +9,24 @@ import dev.emortal.doors.commands.DonateCommand
 import dev.emortal.doors.config.DoorsConfig
 import dev.emortal.doors.game.DoorsGame
 import dev.emortal.doors.lobby.DoorsLobby
-import dev.emortal.doors.pathfinding.rotate
 import dev.emortal.doors.schematic.RoomSchematic
 import dev.emortal.immortal.ImmortalExtension
 import dev.emortal.immortal.config.ConfigHelper
 import dev.emortal.immortal.config.GameOptions
 import dev.emortal.immortal.game.GameManager
 import dev.emortal.immortal.game.WhenToRegisterEvents
-import dev.hypera.scaffolding.schematic.impl.SpongeSchematic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import net.hollowcube.util.schem.SchematicReader
 import net.kyori.adventure.text.Component
 import net.minestom.server.MinecraftServer
-import net.minestom.server.coordinate.Point
 import net.minestom.server.coordinate.Pos
-import net.minestom.server.coordinate.Vec
 import net.minestom.server.extras.MojangAuth
 import net.minestom.server.extras.bungee.BungeeCordProxy
 import net.minestom.server.extras.velocity.VelocityProxy
 import net.minestom.server.instance.DynamicChunk
 import net.minestom.server.instance.Instance
-import net.minestom.server.instance.block.Block
-import net.minestom.server.utils.Direction
 import net.minestom.server.utils.NamespaceID
 import net.minestom.server.world.DimensionType
 import org.tinylog.kotlin.Logger
@@ -49,7 +44,6 @@ import java.nio.file.StandardWatchEventKinds
 import java.util.*
 import java.util.stream.Collectors
 import kotlin.io.path.absolutePathString
-import kotlin.io.path.inputStream
 import kotlin.io.path.isDirectory
 import kotlin.io.path.nameWithoutExtension
 
@@ -72,139 +66,34 @@ fun Instance.relight(position: Pos) {
 val numSchems = Files.list(Path.of("./numbers/"))
     .filter { !it.isDirectory() }
     .collect(Collectors.toSet()).map {
-        val schem = SpongeSchematic()
-        schem.read(it.inputStream())
-
         Logger.info("Reading number ${it}")
 
-        schem
+        SchematicReader.read(it)
     }
 
 val schematics = Files.list(Path.of("./rooms/"))
     .filter { !it.isDirectory() }
     .collect(Collectors.toSet()).map {
-        val schem = SpongeSchematic()
-        schem.read(it.inputStream())
-
         Logger.info("Reading schematic ${it}")
 
-        RoomSchematic(schem, it.nameWithoutExtension)
+        RoomSchematic(SchematicReader.read(it), it.nameWithoutExtension)
     }
 
 val seekSchematics = Files.list(Path.of("./rooms/seek/"))
     .filter { !it.isDirectory() }
     .collect(Collectors.toSet()).map {
-        val schem = SpongeSchematic()
-        schem.read(it.inputStream())
-
         Logger.info("Reading seek schematic ${it}")
 
-        RoomSchematic(schem, it.nameWithoutExtension)
+        RoomSchematic(SchematicReader.read(it), it.nameWithoutExtension)
     }
 
-val doorSchem = SpongeSchematic().also {
-    it.read(Path.of("./doordesign.schem").inputStream())
-}
+// placeholder - big schematic for door bound comparison
+val bigSchem = RoomSchematic(SchematicReader.read(Path.of("./rooms/roomcross.schem")), "roomcross")
 
-val startingSchem = RoomSchematic(SpongeSchematic().also {
-    it.read(Path.of("./startingroom.schem").inputStream())
-}, "roomstarting")
-val endingSchem = RoomSchematic(SpongeSchematic().also {
-    it.read(Path.of("./roomending.schem").inputStream())
-}, "roomending")
+val doorSchem = SchematicReader.read(Path.of("./doordesign.schem"))
 
-/**
- * @return New position and block
- */
-fun applyRotationToBlock(offset: Point, x: Int, y: Int, z: Int, block: Block, direction: Direction, schematic: SpongeSchematic): Pair<Point, Block> {
-    lateinit var newBlockPos: Point
-    var modifiedBlock = block
-
-    when (direction) {
-        // No rotation
-        Direction.NORTH -> {
-            newBlockPos = Vec(x.toDouble(), y.toDouble(), z.toDouble()).add(offset)
-        }
-        // Rotate 90
-        Direction.WEST -> {
-            val facingProperty = block.getProperty("facing")
-            if (facingProperty != null) {
-                val dir = Direction.valueOf(facingProperty.uppercase()).rotate().opposite()
-                modifiedBlock = modifiedBlock.withProperty("facing", dir.name.lowercase())
-            }
-
-            // Fence rotation
-            if (block.getProperty("north") != null) {
-                val northProperty = block.getProperty("north")
-                val eastProperty = block.getProperty("east")
-                val southProperty = block.getProperty("south")
-                val westProperty = block.getProperty("west")
-
-                modifiedBlock = modifiedBlock.withProperties(mapOf(
-                    "north" to eastProperty,
-                    "east" to southProperty,
-                    "south" to westProperty,
-                    "west" to northProperty
-                ))
-            }
-
-            newBlockPos = Vec(z.toDouble(), y.toDouble(), ((schematic.width - x) - schematic.width).toDouble()).add(offset)
-        }
-        // Rotate 180
-        Direction.SOUTH -> {
-            val facingProperty = block.getProperty("facing")
-            if (facingProperty != null) {
-                val dir = Direction.valueOf(facingProperty.uppercase()).opposite()
-                modifiedBlock = modifiedBlock.withProperty("facing", dir.name.lowercase())
-            }
-
-            // Fence rotation
-            if (block.getProperty("north") != null) {
-                val northProperty = block.getProperty("north")
-                val eastProperty = block.getProperty("east")
-                val southProperty = block.getProperty("south")
-                val westProperty = block.getProperty("west")
-
-                modifiedBlock = modifiedBlock.withProperties(mapOf(
-                    "north" to southProperty,
-                    "east" to westProperty,
-                    "south" to northProperty,
-                    "west" to eastProperty
-                ))
-            }
-
-            newBlockPos = Vec(((schematic.width - x) - schematic.width).toDouble(), y.toDouble(), ((schematic.length - z) - schematic.length).toDouble()).add(offset)
-        }
-        // Rotate -90
-        Direction.EAST -> {
-            val facingProperty =  block.getProperty("facing")
-            if (facingProperty != null) {
-                val dir = Direction.valueOf(facingProperty.uppercase()).rotate()
-                modifiedBlock = modifiedBlock.withProperty("facing", dir.name.lowercase())
-            }
-
-            // Fence rotation
-            if (block.getProperty("north") != null) {
-                val northProperty = block.getProperty("north")
-                val eastProperty = block.getProperty("east")
-                val southProperty = block.getProperty("south")
-                val westProperty = block.getProperty("west")
-
-                modifiedBlock = modifiedBlock.withProperties(mapOf(
-                    "north" to westProperty,
-                    "east" to northProperty,
-                    "south" to eastProperty,
-                    "west" to southProperty
-                ))
-            }
-
-            newBlockPos = Vec(((schematic.length - z) - schematic.length).toDouble(), y.toDouble(), x.toDouble()).add(offset)
-        }
-        else -> {}
-    }
-
-    return newBlockPos to modifiedBlock
-}
+val startingSchem = RoomSchematic(SchematicReader.read(Path.of("./startingroom.schem")), "roomstarting")
+val endingSchem = RoomSchematic(SchematicReader.read(Path.of("./roomending.schem")), "roomending")
 
 class Main() {
     companion object {
@@ -212,8 +101,6 @@ class Main() {
         var doorsConfig = ConfigHelper.initConfigFile(configPath, DoorsConfig(listOf()))
     }
 }
-
-
 
 fun main() {
 

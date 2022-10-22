@@ -22,7 +22,8 @@ dependencies {
 
     implementation("com.github.EmortalMC:Immortal:1174fefda5")
 
-    implementation("dev.hypera:Scaffolding:0.1.3-SNAPSHOT")
+    //implementation("com.github.emortaldev:Scaffolding:aa0cecf7e5")
+    implementation("com.github.hollow-cube.common:schem:fffa7f431b")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.4.0")

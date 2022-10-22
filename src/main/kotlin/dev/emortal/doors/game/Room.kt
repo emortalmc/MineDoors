@@ -1,23 +1,23 @@
 package dev.emortal.doors.game
 
-import dev.emortal.doors.applyRotationToBlock
+import dev.emortal.doors.bigSchem
 import dev.emortal.doors.block.ChestHandler
 import dev.emortal.doors.block.SignHandler
 import dev.emortal.doors.doorSchem
 import dev.emortal.doors.game.ChestLoot.addRandomly
 import dev.emortal.doors.game.DoorsGame.Companion.applyDoor
+import dev.emortal.doors.pathfinding.asDirection
 import dev.emortal.doors.pathfinding.offset
 import dev.emortal.doors.pathfinding.rotate
+import dev.emortal.doors.pathfinding.rotatePos
 import dev.emortal.doors.relight
 import dev.emortal.doors.schematic.RoomBounds.Companion.isOverlapping
 import dev.emortal.doors.schematic.RoomSchematic
 import dev.emortal.doors.schematics
-import dev.hypera.scaffolding.region.Region
-import dev.hypera.scaffolding.schematic.impl.SpongeSchematic
+import net.hollowcube.util.schem.Rotation
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import net.minestom.server.coordinate.Point
-import net.minestom.server.coordinate.Vec
 import net.minestom.server.entity.Entity
 import net.minestom.server.entity.EntityType
 import net.minestom.server.entity.metadata.other.PaintingMeta
@@ -42,30 +42,7 @@ import java.util.concurrent.ThreadLocalRandom
 import kotlin.collections.set
 
 
-val SpongeSchematic.offset: Point get() = Vec(offsetX.toDouble(), offsetY.toDouble(), offsetZ.toDouble())
-// requires direction to account for overlap
-fun SpongeSchematic.size(direction: Direction): Point = Vec(width.toDouble(), height.toDouble(), length.toDouble())
-
-fun Point.rotate90() = Vec(z(), y(), -x())
-fun Point.rotate180() = Vec(-x(), y(), -z())
-fun Point.rotate270() = Vec(-z(), y(), x())
-
-//fun SpongeSchematic.doors(position: Point, direction: Direction): MutableSet<Pair<Point, Direction>> {
-//    val doorPositions = mutableSetOf<Pair<Point, Direction>>()
-//
-//    apply { x, y, z, block ->
-//        val rotatedBlock = applyRotationToBlock(position, x, y, z, block, direction, this)
-//
-//        if (rotatedBlock.second.compare(Block.DARK_OAK_DOOR) && rotatedBlock.second.getProperty("half") == "lower") {
-//            doorPositions.add(rotatedBlock.first to Direction.valueOf(rotatedBlock.second.getProperty("facing").uppercase()))
-//        }
-//
-//    }
-//
-//    return doorPositions
-//}
-
-class Room(val game: DoorsGame, val instance: Instance, val position: Point, val direction: Direction) {
+class Room(val game: DoorsGame, val instance: Instance, val position: Point, val rotation: Rotation) {
 
     companion object {
         val lightBlockTypes = setOf<Block>(
@@ -91,42 +68,38 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
     // 10% chance for dark room
     var darkRoom = number > 7 && ThreadLocalRandom.current().nextDouble() < 0.10
 
-    fun applyRoom(schemList: Collection<RoomSchematic> = schematics.toMutableList(), force: Boolean = false): CompletableFuture<Void>? {
-        val randomSchem = if (force) {
-            schemList.random()
-        } else {
-            schemList.shuffled().firstOrNull { schem ->
-                val bounds = schem.bounds(position, direction)
-                if (bounds.outOfBounds()) {
-                    Logger.info("out of bounds")
-                    Logger.info(bounds.toString())
-                    return@firstOrNull false
-                }
-
-                val doors = schem.doorPositions.map { applyRotationToBlock(position, it.first.blockX(), it.first.blockY(), it.first.blockZ(), it.second, direction, schem.schem) }
-
-                // check that the attempted schem
-                // - will not overlap with any rooms
-                // - have atleast one door available to spawn next room from
-                val noRooms = game.rooms.none { otherRoom ->
-                    if (otherRoom.number + 1 == number) return@none false
-
-                    val otherRoomBounds = otherRoom.schematic.bounds(otherRoom.position, otherRoom.direction)
-
-                    val isOverlapping = isOverlapping(bounds, otherRoomBounds)
-                    val allDoorsOverlapping = doors.all { door ->
-                        val doorbound = schem.bounds(door.first, Direction.valueOf(door.second.getProperty("facing").uppercase()))
-
-                        isOverlapping(doorbound, otherRoomBounds)
-                    }
-
-                    Logger.info("overlap ${isOverlapping}")
-                    Logger.info("doors overlap ${allDoorsOverlapping}")
-                    isOverlapping || allDoorsOverlapping
-                }
-
-                noRooms
+    fun applyRoom(schemList: Collection<RoomSchematic> = schematics.toMutableList()): CompletableFuture<Void>? {
+        val randomSchem = schemList.shuffled().firstOrNull { schem ->
+            val bounds = schem.bounds(position, rotation)
+            if (bounds.outOfBounds()) {
+                Logger.info("out of bounds")
+                Logger.info(bounds.toString())
+                return@firstOrNull false
             }
+
+            val doors = schem.doorPositions.map { it.first.rotatePos(rotation).add(position) to it.second.rotate(rotation) }
+
+            // check that the attempted schem
+            // - will not overlap with any rooms
+            // - have atleast one door available to spawn next room from
+            val noRooms = game.rooms.none { otherRoom ->
+                if (otherRoom.number + 1 == number) return@none false
+
+                val otherRoomBounds = otherRoom.schematic.bounds(otherRoom.position, otherRoom.rotation)
+
+                val isOverlapping = isOverlapping(bounds, otherRoomBounds)
+                val allDoorsOverlapping = doors.all { door ->
+                    val doorbound = bigSchem.bounds(door.first, door.second)
+
+                    isOverlapping(doorbound, otherRoomBounds)
+                }
+
+                Logger.info("overlap ${isOverlapping}")
+                Logger.info("doors overlap ${allDoorsOverlapping}")
+                isOverlapping || allDoorsOverlapping
+            }
+
+            noRooms
         }
 
 
@@ -136,29 +109,29 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
             return null
         }
 
-        val doorPositions = randomSchem.doorPositions.map { applyRotationToBlock(position, it.first.blockX(), it.first.blockY(), it.first.blockZ(), it.second, direction, randomSchem.schem) }
-        val availableDoorPositions = if (force) doorPositions else doorPositions.filter { door ->
-            val doorDir = Direction.valueOf(door.second.getProperty("facing").uppercase())
-            if (doorDir == Direction.SOUTH) return@filter false
+        val doorPositions = randomSchem.doorPositions.map { it.first.rotatePos(rotation).add(position) to it.second.rotate(rotation) }
+        val randomDoor = doorPositions.shuffled().firstOrNull { door ->
+            val doorDir = door.second
+            if (doorDir == Rotation.CLOCKWISE_180) return@firstOrNull false
 
             // TODO - doesn't really work properly
             val doorbound = randomSchem.bounds(door.first, doorDir)
-            if (doorbound.outOfBounds()) return@filter false
+            if (doorbound.outOfBounds()) return@firstOrNull false
 
             game.rooms.none { otherRoom ->
                 if (otherRoom.number + 1 == number) return@none false
-                isOverlapping(doorbound, otherRoom.schematic.bounds(otherRoom.position, otherRoom.direction))
+                isOverlapping(doorbound, otherRoom.schematic.bounds(otherRoom.position, otherRoom.rotation))
             }
         }
 
-        if (availableDoorPositions.isEmpty()) {
+        if (randomDoor == null) {
             Logger.info("Available doors was empty")
 
             val newSchemList = schemList.filter { it != randomSchem }.filter {
-                val bounds = it.bounds(position, direction)
+                val bounds = it.bounds(position, rotation)
                 game.rooms.none { otherRoom ->
                     if (otherRoom.number + 1 == number) return@none false
-                    isOverlapping(bounds, otherRoom.schematic.bounds(otherRoom.position, otherRoom.direction))
+                    isOverlapping(bounds, otherRoom.schematic.bounds(otherRoom.position, otherRoom.rotation))
                 }
             }
             if (newSchemList.isEmpty()) {
@@ -168,73 +141,67 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
 
             return applyRoom(newSchemList)
         }
-        val randomDoor = availableDoorPositions.random()
-        val randomDoorDir = Direction.valueOf(randomDoor.second.getProperty("facing").uppercase())
 
         val paintingPositions = mutableSetOf<Pair<Point, Direction>>()
 
         val batch = AbsoluteBlockBatch(BatchOption().setCalculateInverse(true))
 
-        val blockList = mutableListOf<Region.Block>()
-
         val doubleChests = mutableMapOf<Point, Pair<Point, Block>>()
 
-        randomSchem.schem.apply { x, y, z, block ->
-            val rotatedBlock = applyRotationToBlock(position, x, y, z, block, direction, randomSchem.schem)
-
-            blockList.add(Region.Block(rotatedBlock.first.asPos(), rotatedBlock.second.stateId()))
+        randomSchem.schem.apply(rotation) { pos, block ->
+            val blockPos = pos.add(position)
 
             // Initialize chests
-            if (rotatedBlock.second.compare(Block.CHEST)) {
+            if (block.compare(Block.CHEST)) {
 
-                val type = rotatedBlock.second.getProperty("type")
+                val type = block.getProperty("type")
                 if (type == "single") {
-                    val handler = ChestHandler(game, rotatedBlock.first)
-                    chests.add(rotatedBlock.first to handler)
-                    batch.setBlock(rotatedBlock.first, rotatedBlock.second.withHandler(handler))
+                    val handler = ChestHandler(game, blockPos)
+                    chests.add(blockPos to handler)
+                    batch.setBlock(blockPos, block.withHandler(handler))
                 } else { // left or right
-                    if (doubleChests.containsKey(rotatedBlock.first)) {
-                        val doubleChest = doubleChests[rotatedBlock.first]!!
-                        val handler = ChestHandler(game, rotatedBlock.first)
-                        batch.setBlock(rotatedBlock.first, rotatedBlock.second.withHandler(handler))
+                    if (doubleChests.containsKey(blockPos)) {
+                        val doubleChest = doubleChests[blockPos]!!
+                        val handler = ChestHandler(game, blockPos)
+                        batch.setBlock(blockPos, block.withHandler(handler))
                         batch.setBlock(doubleChest.first, doubleChest.second.withHandler(handler))
-                        chests.add(rotatedBlock.first to handler)
-                        doubleChests.remove(rotatedBlock.first)
+                        chests.add(blockPos to handler)
+                        doubleChests.remove(blockPos)
                     } else {
-                        val newPos = rotatedBlock.first.add(
-                            Direction.valueOf(rotatedBlock.second.getProperty("facing").uppercase()).rotate().rotate()
+                        val newPos = blockPos.add(
+                            Direction.valueOf(block.getProperty("facing").uppercase()).rotate().rotate()
                                 .rotate().offset()
                         )
-                        doubleChests[newPos] = rotatedBlock
+                        doubleChests[newPos] = blockPos to block
                     }
                 }
                 return@apply
             }
 
             // Signs (painting, lever)
-            if (rotatedBlock.second.compare(Block.WARPED_WALL_SIGN)) {
-                val direction = Direction.valueOf(rotatedBlock.second.getProperty("facing").uppercase())
+            if (block.compare(Block.WARPED_WALL_SIGN)) {
+                val direction = Direction.valueOf(block.getProperty("facing").uppercase())
 
-                paintingPositions.add(rotatedBlock.first to direction)
+                paintingPositions.add(blockPos to direction)
 
                 return@apply
             }
 
-            if (lightBlockTypes.any { it.compare(rotatedBlock.second) }) {
+            if (lightBlockTypes.any { it.compare(block) }) {
                 if (darkRoom) {
                     // Do not add to light blocks list, and do not place the block (return early)
                     return@apply
                 } else {
-                    lightBlocks.add(rotatedBlock)
+                    lightBlocks.add(blockPos to block)
                 }
             }
 
-            if (!instance.getBlock(rotatedBlock.first).compare(Block.AIR)) return@apply
+            if (!instance.getBlock(blockPos).compare(Block.AIR)) return@apply
 
-            batch.setBlock(rotatedBlock.first, rotatedBlock.second)
+            batch.setBlock(blockPos, block)
         }
 
-        closets = blockList.count { Block.fromStateId(it.stateId)!!.compare(Block.SPRUCE_DOOR) } / 4
+//        closets = blockList.count { Block.fromStateId(it.stateId)!!.compare(Block.SPRUCE_DOOR) } / 4
 
         if (!keyRoom) keyRoom = randomSchem.name.endsWith("key")
 
@@ -251,15 +218,15 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
 
         // loop through other doors and remove them
         doorPositions.forEachIndexed { i, door ->
-            val doorDir = Direction.valueOf(door.second.getProperty("facing").uppercase())
+            val doorDir = door.second
             if (i == doorPositions.indexOf(randomDoor)) return@forEachIndexed // ignore the picked door
 
-            applyDoor(game, batch, doorSchem, door.first, doorDir, instance)
+//            applyDoor(game, batch, doorSchem, door.first, doorDir.asRotation(), instance)
         }
 
-        applyDoor(game, batch, doorSchem, randomDoor.first, randomDoorDir, instance)
+        applyDoor(batch, doorSchem, randomDoor.first, randomDoor.second)
         game.activeDoorPosition = randomDoor.first
-        game.activeDoorDirection = randomDoorDir
+        game.activeDoorRotation = randomDoor.second
         game.doorPositions.add(randomDoor.first)
 
         paintingPositions.forEach {
@@ -294,9 +261,9 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
         ).parse() as NBTCompound
 
         batch.setBlock(
-            randomDoor.first.add(0.0, 2.0, 0.0).sub(randomDoorDir.offset()),
+            randomDoor.first.add(0.0, 2.0, 0.0).sub(randomDoor.second.offset()),
             Block.DARK_OAK_WALL_SIGN
-                .withProperties(mapOf("facing" to randomDoorDir.opposite().name.lowercase()))
+                .withProperties(mapOf("facing" to randomDoor.second.rotate(Rotation.CLOCKWISE_180).asDirection().name.lowercase()))
                 .withHandler(SignHandler)
                 .withNbt(data)
         )
