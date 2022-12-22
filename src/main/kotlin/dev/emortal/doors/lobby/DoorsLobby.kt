@@ -4,13 +4,8 @@ import dev.emortal.doors.Main.Companion.doorsConfig
 import dev.emortal.doors.game.DoorsGame
 import dev.emortal.doors.lobby.Elevator.Companion.elevatorTag
 import dev.emortal.doors.schematic.RoomBounds
-import dev.emortal.immortal.config.GameOptions
-import dev.emortal.immortal.game.GameManager
-import dev.emortal.immortal.game.LobbyGame
+import dev.emortal.immortal.game.Game
 import dev.emortal.immortal.util.*
-import net.kyori.adventure.key.Key
-import net.kyori.adventure.sound.Sound
-import net.kyori.adventure.sound.Sound.Emitter
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.event.ClickEvent
 import net.kyori.adventure.text.format.NamedTextColor
@@ -18,24 +13,21 @@ import net.kyori.adventure.text.format.TextColor
 import net.kyori.adventure.text.format.TextDecoration
 import net.minestom.server.coordinate.Point
 import net.minestom.server.coordinate.Pos
-import net.minestom.server.coordinate.Vec
-import net.minestom.server.entity.Entity
-import net.minestom.server.entity.EntityType
 import net.minestom.server.entity.Player
-import net.minestom.server.entity.metadata.other.ArmorStandMeta
+import net.minestom.server.event.EventNode
 import net.minestom.server.event.inventory.InventoryPreClickEvent
 import net.minestom.server.event.player.PlayerBlockInteractEvent
 import net.minestom.server.event.player.PlayerPacketEvent
-import net.minestom.server.event.player.PlayerResourcePackStatusEvent
 import net.minestom.server.event.player.PlayerTickEvent
+import net.minestom.server.event.trait.InstanceEvent
 import net.minestom.server.instance.AnvilLoader
+import net.minestom.server.instance.Chunk
 import net.minestom.server.instance.Instance
 import net.minestom.server.item.ItemStack
 import net.minestom.server.item.Material
 import net.minestom.server.item.metadata.LeatherArmorMeta
 import net.minestom.server.network.packet.client.play.ClientSteerVehiclePacket
 import net.minestom.server.resourcepack.ResourcePack
-import net.minestom.server.resourcepack.ResourcePackStatus
 import world.cepi.kstom.Manager
 import world.cepi.kstom.event.listenOnly
 import java.awt.Color
@@ -43,16 +35,22 @@ import java.net.URL
 import java.security.MessageDigest
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
+import java.util.concurrent.CopyOnWriteArraySet
 
 
-class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
+class DoorsLobby : Game() {
 
+    override val allowsSpectators = false
+    override val countdownSeconds = 0
+    override val maxPlayers = 50
+    override val minPlayers = 0
+    override val showScoreboard = false
+    override val canJoinDuringGame = true
+    override val showsJoinLeaveMessages = true
 
-    override var spawnPosition = Pos(0.0, 65.0, 0.0)
-
-    val armourStandSeatMap = ConcurrentHashMap<Entity, Point>()
+    val armourStandSeatList = CopyOnWriteArraySet<Point>()
 
     companion object {
         private const val url = "https://github.com/EmortalMC/Resourcepack/releases/download/latest/pack.zip"
@@ -79,6 +77,7 @@ class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
         }
 
 
+        val spawnPosition = Pos(0.0, 65.0, 0.0)
 
         val leftDoors = listOf<Point>(
             Pos(8.0, 65.0, 14.0),
@@ -90,24 +89,34 @@ class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
         val rightDoors = leftDoors.map { it.withX(-9.0) }
     }
 
-    val executor = Executors.newScheduledThreadPool(1)
-    val musicTasks = ConcurrentHashMap<UUID, ExecutorRunnable>()
-    lateinit var leftElevators: List<Elevator>
-    lateinit var rightElevators: List<Elevator>
+    val musicTasks = ConcurrentHashMap<UUID, MinestomRunnable>()
+    var leftElevators: List<Elevator>? = null
+    var rightElevators: List<Elevator>? = null
 
-    override fun gameDestroyed() {
-        executor.shutdownNow()
+    override fun getSpawnPosition(player: Player, spectator: Boolean): Pos = spawnPosition
+
+    override fun gameEnded() {
+        leftElevators = null
+        rightElevators = null
+
         musicTasks.clear()
-        armourStandSeatMap.clear()
+        armourStandSeatList.clear()
+    }
+
+    private val fullyLoadedFuture = CompletableFuture<Void>()
+
+    override fun gameCreated() {
+        start()
+
+        fullyLoadedFuture.thenRun {
+            leftElevators = leftDoors.mapIndexed { i, it -> Elevator(instance!!, it, RoomBounds(it.add(4.0, 0.0, -2.0), it.add(0.0, 0.0, 2.0)), i) }
+            rightElevators = rightDoors.mapIndexed { i, it -> Elevator(instance!!, it, RoomBounds(it.add(-3.0, 0.0, -2.0), it.add(0.0, 0.0, 2.0)), i + 5) }
+        }
     }
 
     override fun gameStarted() {
-        val instance = instance.get() ?: return
 
-        instance.setTag(GameManager.doNotAutoUnloadChunkTag, true)
-        instance.enableAutoChunkLoad(false)
-
-        object : ExecutorRunnable(repeat = Duration.ofMillis(100), executor = executor) {
+        object : MinestomRunnable(repeat = Duration.ofMillis(100), group = runnableGroup) {
             var rainbow = 0f
 
             override fun run() {
@@ -123,9 +132,6 @@ class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
                 }
             }
         }
-
-        leftElevators = leftDoors.mapIndexed { i, it -> Elevator(this, instance, it, RoomBounds(it.add(4.0, 0.0, -2.0), it.add(0.0, 0.0, 2.0)), i) }
-        rightElevators = rightDoors.mapIndexed { i, it -> Elevator(this, instance, it, RoomBounds(it.add(-3.0, 0.0, -2.0), it.add(0.0, 0.0, 2.0)), i + 5) }
     }
 
 
@@ -170,53 +176,20 @@ class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
 
         if (elevatorIndex != null) {
             val elevator = if (elevatorIndex >= 5) {
-                rightElevators[elevatorIndex - 5]
+                rightElevators?.get(elevatorIndex - 5)
             } else {
-                leftElevators[elevatorIndex]
+                leftElevators?.get(elevatorIndex)
             }
 
-            elevator.removePlayer(player)
+            elevator?.removePlayer(player)
         }
-
-        val playerVehicle = player.vehicle
-        if (playerVehicle != null) {
-            if (armourStandSeatMap.containsKey(playerVehicle)) {
-                armourStandSeatMap.remove(playerVehicle)
-                playerVehicle.remove()
-            }
-        }
-
 
         player.removeTag(elevatorTag)
         musicTasks[player.uuid]?.cancel()
         musicTasks.remove(player.uuid)
     }
 
-    override fun registerEvents() {
-        eventNode.listenOnly<PlayerResourcePackStatusEvent> {
-            when (status) {
-                ResourcePackStatus.SUCCESS -> {
-                    player.sendActionBar(Component.text("Resource pack applied successfully"))
-
-                    musicTasks[player.uuid] = object : ExecutorRunnable(delay = Duration.ofSeconds(3), repeat = Duration.ofMillis(213_300), executor = executor) {
-                        override fun run() {
-                            player.playSound(Sound.sound(Key.key("music.dawnofthedoors"), Sound.Source.MASTER, 0.4f, 1f), Emitter.self())
-                        }
-                    }
-                }
-
-                ResourcePackStatus.DECLINED -> {
-                    player.kick(Component.text("The resource pack is required. You can ignore the prompt by allowing server resource packs."))
-                }
-
-                ResourcePackStatus.FAILED_DOWNLOAD -> {
-                    player.kick(Component.text("The resource pack failed to download. Please contact a staff member.\ndiscord.gg/TZyuMSha96"))
-                }
-
-                else -> {}
-            }
-        }
-
+    override fun registerEvents(eventNode: EventNode<InstanceEvent>) {
         eventNode.cancel<InventoryPreClickEvent>()
 
         eventNode.listenOnly<PlayerBlockInteractEvent> {
@@ -225,18 +198,15 @@ class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
 
             if (block.name().contains("stair", true)) {
                 if (player.vehicle != null) return@listenOnly
-                if (armourStandSeatMap.values.contains(blockPosition)) return@listenOnly
+                if (armourStandSeatList.contains(blockPosition)) {
+                    player.sendActionBar(Component.text("You can't sit on someone's lap", NamedTextColor.RED))
+                    return@listenOnly
+                }
                 if (block.getProperty("half") == "top") return@listenOnly
 
-                val armourStand = Entity(EntityType.ARMOR_STAND)
-                val armourStandMeta = armourStand.entityMeta as ArmorStandMeta
-                armourStandMeta.setNotifyAboutChanges(false)
-                armourStandMeta.isSmall = true
-                armourStandMeta.isHasNoBasePlate = true
-                armourStandMeta.isMarker = true
-                armourStandMeta.isInvisible = true
-                armourStandMeta.setNotifyAboutChanges(true)
-                armourStand.setNoGravity(true)
+                val armourStand = SeatEntity {
+                    armourStandSeatList.remove(blockPosition)
+                }
 
                 val spawnPos = blockPosition.add(0.5, 0.3, 0.5)
                 val yaw = when (block.getProperty("facing")) {
@@ -251,7 +221,7 @@ class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
                         armourStand.addPassenger(player)
                     }
 
-                armourStandSeatMap[armourStand] = blockPosition
+                armourStandSeatList.add(blockPosition)
             }
         }
 
@@ -261,12 +231,12 @@ class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
                     val elevatorIndex = player.getTag(elevatorTag)
 
                     val elevator = if (elevatorIndex >= 5) {
-                        rightElevators[elevatorIndex - 5]
+                        rightElevators?.get(elevatorIndex - 5)
                     } else {
-                        leftElevators[elevatorIndex]
+                        leftElevators?.get(elevatorIndex)
                     }
 
-                    elevator.removePlayer(player)
+                    elevator?.removePlayer(player)
                 }
 
                 return@listenOnly
@@ -274,18 +244,18 @@ class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
 
             if (player.position.blockX() <= 8 && player.position.blockX() >= -9) return@listenOnly
 
-            val leftRoomCollide = leftElevators.firstOrNull { RoomBounds.isInside(it.bounds, player.position, 0) }
+            val leftRoomCollide = leftElevators?.firstOrNull { RoomBounds.isInside(it.bounds, player.position, 0) }
 
             if (leftRoomCollide != null) {
-                leftRoomCollide.addPlayer(player)
+                leftRoomCollide.addPlayer(this@DoorsLobby, player)
 
                 return@listenOnly
             }
 
-            val rightRoomCollide = rightElevators.firstOrNull { RoomBounds.isInside(it.bounds, player.position, 0) }
+            val rightRoomCollide = rightElevators?.firstOrNull { RoomBounds.isInside(it.bounds, player.position, 0) }
 
             if (rightRoomCollide != null) {
-                rightRoomCollide.addPlayer(player)
+                rightRoomCollide.addPlayer(this@DoorsLobby, player)
 
                 return@listenOnly
             }
@@ -299,12 +269,6 @@ class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
                     if (player.vehicle != null && player.vehicle !is Player) {
                         val entity = player.vehicle!!
                         entity.removePassenger(player)
-
-                        if (armourStandSeatMap.containsKey(entity)) {
-                            armourStandSeatMap.remove(entity)
-                            entity.remove()
-                            player.velocity = Vec(0.0, 10.0, 0.0)
-                        }
                     }
                     return@listenOnly
                 }
@@ -313,34 +277,37 @@ class DoorsLobby(gameOptions: GameOptions) : LobbyGame(gameOptions) {
         }
     }
 
-    override fun instanceCreate(): Instance {
+    override fun instanceCreate(): CompletableFuture<Instance> {
+        val instanceFuture = CompletableFuture<Instance>()
 //        val dim = Manager.dimensionType.getDimension(NamespaceID.from("fullbrighttt"))!!
-        val instance = Manager.instance.createInstanceContainer()
-        instance.time = 18000
-        instance.timeRate = 0
-        instance.timeUpdate = null
-        instance.setHasLighting(false)
+        val newInstance = Manager.instance.createInstanceContainer()
+        newInstance.time = 18000
+        newInstance.timeRate = 0
+        newInstance.timeUpdate = null
+        newInstance.setHasLighting(false)
 
-        instance.chunkLoader = AnvilLoader("./roomslobby/")
+        newInstance.chunkLoader = AnvilLoader("./roomslobby/")
 
-        instance.enableAutoChunkLoad(true)
-//        instance.setTag(GameManager.doNotAutoUnloadChunkTag, true)
+        newInstance.enableAutoChunkLoad(false)
 
-        val range = 3
-//        val latch = CountDownLatch(range + 1 * range + 1)
-//
-//        instance.loadChunk(0, 0)
-//        for (x in -range..range) {
-//            for (z in -range..range) {
-//                instance.loadChunk(x, z).thenAccept {
-//                    println("${it.chunkX} ${it.chunkZ}")
-//                    latch.countDown()
-//                }
-//            }
-//        }
-//        latch.await(5, TimeUnit.SECONDS)
+        // 1 chunk required for player to spawn
+        newInstance.loadChunk(0, 0).thenRun { instanceFuture.complete(newInstance) }
 
-        return instance
+        val radius = 8
+        val chunkFutures = mutableListOf<CompletableFuture<Chunk>>()
+        for (x in -radius..radius) {
+            for (z in -radius..radius) {
+                val future= newInstance.loadChunk(x, z)
+                chunkFutures.add(future)
+                future.thenAccept { it.sendChunk() }
+            }
+        }
+
+        CompletableFuture.allOf(*chunkFutures.toTypedArray()).thenRunAsync {
+            fullyLoadedFuture.complete(null)
+        }
+
+        return instanceFuture
     }
 
 }

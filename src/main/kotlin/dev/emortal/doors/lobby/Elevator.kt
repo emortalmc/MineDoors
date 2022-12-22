@@ -1,11 +1,9 @@
 package dev.emortal.doors.lobby
 
-import dev.emortal.doors.game.DoorsGame
-import dev.emortal.doors.util.MultilineHologramAEC
 import dev.emortal.doors.schematic.RoomBounds
-import dev.emortal.immortal.config.GameOptions
-import dev.emortal.immortal.game.GameManager.joinGame
-import dev.emortal.immortal.util.ExecutorRunnable
+import dev.emortal.doors.util.MultilineHologramAEC
+import dev.emortal.immortal.game.GameManager
+import dev.emortal.immortal.util.MinestomRunnable
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.sound.Sound
 import net.kyori.adventure.sound.SoundStop
@@ -23,7 +21,7 @@ import java.time.Duration
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.atomic.AtomicInteger
 
-data class Elevator(val game: DoorsLobby, val instance: Instance, val doorPos: Point, val bounds: RoomBounds, val index: Int) {
+data class Elevator(val instance: Instance, val doorPos: Point, val bounds: RoomBounds, val index: Int) {
 
     companion object {
         val elevatorTag = Tag.Integer("elevatorNum")
@@ -39,10 +37,10 @@ data class Elevator(val game: DoorsLobby, val instance: Instance, val doorPos: P
 
     private var shorterSecondsLeft = AtomicInteger(5)
     private var timerSecondsLeft = AtomicInteger(30)
-    private var timerTask: ExecutorRunnable? = null
+    private var timerTask: MinestomRunnable? = null
 
-    fun startTimer() {
-        timerTask = object : ExecutorRunnable(repeat = Duration.ofSeconds(1), executor = game.executor) {
+    fun startTimer(game: DoorsLobby) {
+        timerTask = object : MinestomRunnable(repeat = Duration.ofSeconds(1), group = game.runnableGroup) {
 
             override fun run() {
                 val secondsLeft = if (players.size == maxPlayers) {
@@ -67,22 +65,12 @@ data class Elevator(val game: DoorsLobby, val instance: Instance, val doorPos: P
                         game.musicTasks.remove(it.uuid)
                     }
 
-                    val preparedGame = DoorsGame(GameOptions(
-                        players.size,
-                        players.size,
-                        countdownSeconds = 0,
-                        canJoinDuringGame = false,
-                        showScoreboard = false,
-                        showsJoinLeaveMessages = false,
-                        allowsSpectators = true
-                    ))
+                    val preparedGame = GameManager.createGame("doors")
 
-                    preparedGame.readyFuture.thenRun {
-                        if (players.size != preparedGame.gameOptions.minPlayers) {
-                            preparedGame.gameOptions = preparedGame.gameOptions.copy(minPlayers = players.size, maxPlayers = players.size)
-                        }
+                    preparedGame?.thenAccept { game ->
                         players.forEach {
-                            it.joinGame(preparedGame, false, true)
+                            val spawnPos = game.getSpawnPosition(it, false)
+                            it.setInstance(game.instance!!, spawnPos)
                         }
 
                         players.clear()
@@ -109,7 +97,7 @@ data class Elevator(val game: DoorsLobby, val instance: Instance, val doorPos: P
         hologram.setLine(1, Component.empty())
     }
 
-    fun addPlayer(player: Player) {
+    fun addPlayer(game: DoorsLobby, player: Player) {
         if (players.size >= maxPlayers) {
             player.teleport(doorPos.asPos())
             if (left) {
@@ -126,7 +114,7 @@ data class Elevator(val game: DoorsLobby, val instance: Instance, val doorPos: P
         players.add(player)
 
         if (timerTask == null) {
-            startTimer()
+            startTimer(game)
         }
 
         players.forEach {

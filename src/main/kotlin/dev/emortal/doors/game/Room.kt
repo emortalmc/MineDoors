@@ -23,7 +23,6 @@ import net.minestom.server.entity.EntityType
 import net.minestom.server.entity.metadata.other.PaintingMeta
 import net.minestom.server.instance.Instance
 import net.minestom.server.instance.batch.AbsoluteBlockBatch
-import net.minestom.server.instance.batch.BatchOption
 import net.minestom.server.instance.block.Block
 import net.minestom.server.item.ItemStack
 import net.minestom.server.item.Material
@@ -82,7 +81,7 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
             // check that the attempted schem
             // - will not overlap with any rooms
             // - have atleast one door available to spawn next room from
-            val noRooms = game.rooms.none { otherRoom ->
+            game.rooms.none { otherRoom ->
                 if (otherRoom.number + 1 == number) return@none false
 
                 val otherRoomBounds = otherRoom.schematic.bounds(otherRoom.position, otherRoom.rotation)
@@ -98,8 +97,6 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
                 Logger.info("doors overlap ${allDoorsOverlapping}")
                 isOverlapping || allDoorsOverlapping
             }
-
-            noRooms
         }
 
 
@@ -115,7 +112,7 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
             if (doorDir == Rotation.CLOCKWISE_180) return@firstOrNull false
 
             // TODO - doesn't really work properly
-            val doorbound = randomSchem.bounds(door.first, doorDir)
+            val doorbound = bigSchem.bounds(door.first, doorDir)
             if (doorbound.outOfBounds()) return@firstOrNull false
 
             game.rooms.none { otherRoom ->
@@ -144,9 +141,11 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
 
         val paintingPositions = mutableSetOf<Pair<Point, Direction>>()
 
-        val batch = AbsoluteBlockBatch(BatchOption().setCalculateInverse(true))
+        val batch = AbsoluteBlockBatch()
 
         val doubleChests = mutableMapOf<Point, Pair<Point, Block>>()
+
+        var closetDoorCount = 0.0
 
         randomSchem.schem.apply(rotation) { pos, block ->
             val blockPos = pos.add(position)
@@ -187,6 +186,10 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
                 return@apply
             }
 
+            if (block.compare(Block.SPRUCE_DOOR)) {
+                closetDoorCount += 1.0/4.0 // (closets have 4 spruce door blocks)
+            }
+
             if (lightBlockTypes.any { it.compare(block) }) {
                 if (darkRoom) {
                     // Do not add to light blocks list, and do not place the block (return early)
@@ -201,7 +204,7 @@ class Room(val game: DoorsGame, val instance: Instance, val position: Point, val
             batch.setBlock(blockPos, block)
         }
 
-//        closets = blockList.count { Block.fromStateId(it.stateId)!!.compare(Block.SPRUCE_DOOR) } / 4
+        closets = (closetDoorCount / 4.0).toInt()
 
         if (!keyRoom) keyRoom = randomSchem.name.endsWith("key")
 

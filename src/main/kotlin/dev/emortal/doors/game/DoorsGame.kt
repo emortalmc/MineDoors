@@ -1,21 +1,22 @@
 package dev.emortal.doors.game
 
-import dev.emortal.doors.*
 import dev.emortal.doors.Main.Companion.doorsConfig
 import dev.emortal.doors.damage.DoorsEntity
 import dev.emortal.doors.damage.EyesDamage
 import dev.emortal.doors.damage.HideDamage
 import dev.emortal.doors.damage.RushDamage
+import dev.emortal.doors.endingSchem
 import dev.emortal.doors.pathfinding.*
 import dev.emortal.doors.raycast.RaycastUtil
+import dev.emortal.doors.schematics
+import dev.emortal.doors.seekSchematics
+import dev.emortal.doors.startingSchem
 import dev.emortal.doors.util.MultilineHologramAEC
 import dev.emortal.doors.util.lerp
-import dev.emortal.immortal.config.GameOptions
 import dev.emortal.immortal.game.Game
-import dev.emortal.immortal.util.ExecutorRunnable
+import dev.emortal.immortal.util.MinestomRunnable
 import dev.emortal.immortal.util.cancel
 import dev.emortal.immortal.util.expInterp
-import dev.emortal.immortal.util.setInstance
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -39,11 +40,13 @@ import net.minestom.server.entity.EntityType
 import net.minestom.server.entity.GameMode
 import net.minestom.server.entity.Player
 import net.minestom.server.entity.metadata.other.*
+import net.minestom.server.event.EventNode
 import net.minestom.server.event.entity.EntityDamageEvent
 import net.minestom.server.event.inventory.InventoryCloseEvent
 import net.minestom.server.event.inventory.InventoryPreClickEvent
 import net.minestom.server.event.item.ItemDropEvent
 import net.minestom.server.event.player.*
+import net.minestom.server.event.trait.InstanceEvent
 import net.minestom.server.instance.Instance
 import net.minestom.server.instance.batch.AbsoluteBlockBatch
 import net.minestom.server.instance.block.Block
@@ -79,7 +82,15 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.ceil
 import kotlin.math.floor
 
-class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
+class DoorsGame : Game() {
+
+    override val allowsSpectators = true
+    override val countdownSeconds = 0
+    override val maxPlayers = 4
+    override val minPlayers = 1
+    override val showScoreboard = false
+    override val canJoinDuringGame = false
+    override val showsJoinLeaveMessages = true
 
     companion object {
         const val rushChanceIncrease = 0.10
@@ -133,9 +144,11 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                 }
             }
         }
+
+        val spawnPosition = Pos(0.5, 0.0, 0.5, 180f, 0f)
     }
 
-    override var spawnPosition = Pos(0.5, 0.0, 0.5, 180f, 0f)
+    override fun getSpawnPosition(player: Player, spectator: Boolean): Pos = spawnPosition
 
     // Mutable for seek, door range increases to prevent ping issues
     var doorRange = 3.6
@@ -170,16 +183,13 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
     private var doorOpenSecondsLeft = AtomicInteger(30)
     private var doorTimerHologram = MultilineHologramAEC(mutableListOf(Component.text(doorOpenSecondsLeft.get(), NamedTextColor.GOLD)))
-    private var doorTask: ExecutorRunnable? = null
-
-    val executor = Executors.newScheduledThreadPool(1)
+    private var doorTask: MinestomRunnable? = null
 
     val readyFuture = CompletableFuture<Void>()
 
 
-    init {
-
-        val lobbyRoom = Room(this, instance.get()!!, Pos(0.5, 0.0, 0.5, 180f, 0f), Rotation.NONE)
+    override fun gameCreated() {
+        val lobbyRoom = Room(this, instance!!, Pos(0.5, 0.0, 0.5, 180f, 0f), Rotation.NONE)
 
         lobbyRoom.applyRoom(listOf(startingSchem))?.thenRun {
             readyFuture.complete(null)
@@ -198,7 +208,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                 it.canPlaceOn(Block.IRON_DOOR)
             }
             .build()
-        itemFrameEntity.setInstance(instance, Pos(-2.0, 2.0, -18.0))
+        itemFrameEntity.setInstance(instance!!, Pos(-2.0, 2.0, -18.0))
 
         lobbyRoom.entityIds.add(itemFrameEntity.entityId)
 
@@ -206,27 +216,25 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
     }
 
     override fun gameStarted() {
-        val instance = instance.get() ?: return
+        rushPathfinding = RushPathfinding(instance!!)
 
-        rushPathfinding = RushPathfinding(instance)
+        doorTimerHologram.setInstance(Pos(0.5, 0.5, -0.8), instance!!)
 
-        doorTimerHologram.setInstance(Pos(0.5, 0.5, -0.8), instance)
-
-        doorTask = object : ExecutorRunnable(repeat = Duration.ofSeconds(1), executor = executor, iterations = 31) {
+        doorTask = object : MinestomRunnable(repeat = Duration.ofSeconds(1), group = runnableGroup, iterations = 31) {
             override fun run() {
                 val doorSecondsLeft = doorOpenSecondsLeft.get()
 
                 doorTimerHologram.setLine(0, Component.text(doorSecondsLeft, NamedTextColor.GOLD))
 
                 if (doorSecondsLeft == 5) {
-                    instance.setBlock(1, 1, -1, Block.POLISHED_BLACKSTONE_BUTTON.withProperties(mapOf("powered" to "true", "facing" to "south")))
+                    instance!!.setBlock(1, 1, -1, Block.POLISHED_BLACKSTONE_BUTTON.withProperties(mapOf("powered" to "true", "facing" to "south")))
                 }
 
                 if (doorSecondsLeft <= 0) {
-                    instance.setBlock(0, 0, -2, Block.IRON_DOOR.withProperties(mapOf("facing" to "north", "half" to "lower", "open" to "true")))
-                    instance.setBlock(0, 1, -2, Block.IRON_DOOR.withProperties(mapOf("facing" to "north", "half" to "upper", "open" to "true")))
+                    instance!!.setBlock(0, 0, -2, Block.IRON_DOOR.withProperties(mapOf("facing" to "north", "half" to "lower", "open" to "true")))
+                    instance!!.setBlock(0, 1, -2, Block.IRON_DOOR.withProperties(mapOf("facing" to "north", "half" to "upper", "open" to "true")))
 
-                    instance.playSound(Sound.sound(SoundEvent.BLOCK_IRON_DOOR_OPEN, Sound.Source.MASTER, 1f, 1f), Pos(0.5, 0.5, -2.0))
+                    instance!!.playSound(Sound.sound(SoundEvent.BLOCK_IRON_DOOR_OPEN, Sound.Source.MASTER, 1f, 1f), Pos(0.5, 0.5, -2.0))
 
                     players.forEach {
                         it.food = 0
@@ -245,7 +253,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
     }
 
-    override fun gameDestroyed() {
+    override fun gameEnded() {
 
     }
 
@@ -297,7 +305,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
         bossBarMap.remove(player.uuid)
     }
 
-    override fun registerEvents() {
+    override fun registerEvents(eventNode: EventNode<InstanceEvent>) {
         eventNode.listenOnly<PlayerMoveEvent> {
 
             // TODO: Rework
@@ -371,6 +379,15 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                     player.setItemInHand(hand, ItemStack.AIR)
                     player.playSound(Sound.sound(SoundEvent.ENTITY_ITEM_BREAK, Sound.Source.MASTER, 1f, 2f), Sound.Emitter.self())
                     generateNextRoom(instance)
+
+                    // Remove the key for all other players
+                    players.forEach { playerInv ->
+                        playerInv.inventory.itemStacks.forEachIndexed { i, it ->
+                            if (it.material() == Material.TRIPWIRE_HOOK) {
+                                playerInv.inventory.setItemStack(i, ItemStack.AIR)
+                            }
+                        }
+                    }
                 } else {
                     player.sendActionBar(Component.text("Use the key on the door!", NamedTextColor.RED))
                 }
@@ -379,15 +396,12 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
             }
         }
 
-        var bellHealth = 10
         eventNode.listenOnly<PlayerBlockInteractEvent> {
             if (player.gameMode != GameMode.ADVENTURE) return@listenOnly
 
-            if (block.compare(Block.BELL) && bellHealth > 0) {
-                instance.playSound(Sound.sound(SoundEvent.BLOCK_BELL_USE, Sound.Source.MASTER, bellHealth.toFloat() / 10f, 2f), blockPosition)
+            if (block.compare(Block.BELL)) {
+                instance.playSound(Sound.sound(SoundEvent.BLOCK_BELL_USE, Sound.Source.MASTER, 1f, 2f), blockPosition)
                 instance.sendGroupedPacket(BlockActionPacket(blockPosition, 1, 2, block.stateId().toInt()))
-
-                bellHealth--
             }
 
             else if (block.compare(Block.POLISHED_BLACKSTONE_BUTTON) && block.getProperty("powered") == "false") {
@@ -408,42 +422,42 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                 this.isCancelled = true
                 this.isBlockingItemUse = true
 
-                val closet = Closet.getFromDoor(this@DoorsGame, block, blockPosition)
-                closet.handleInteraction(player, blockPosition, block, instance)
+                val closet = Closet.getFromDoor(block, blockPosition)
+                closet.handleInteraction(this@DoorsGame, player, blockPosition, block, instance)
             }
 
-            else if (block.compare(Block.END_STONE_BRICK_WALL)) {
-                val lastRoom = rooms.last()
-
-                val towardsScreenOff = lastRoom.rotation.rotate(Rotation.CLOCKWISE_90).offset()
-                val roomPos = blockPosition.add(0.5).add(lastRoom.rotation.offset().mul(10.0)).sub(towardsScreenOff.mul(4.0))
-                val numPastePos = blockPosition.add(lastRoom.rotation.offset().mul(12.0)).add(towardsScreenOff.mul(5.0)).add(0.0, 4.0, 0.0)
-                val lightCenterPos = blockPosition.add(lastRoom.rotation.offset().mul(8.0)).add(towardsScreenOff.mul(5.0)).add(0.0, 2.0, 0.0)
-
-                player.teleport(roomPos.asPos())
-
-                object : ExecutorRunnable(delay = Duration.ofMillis(1500), repeat = Duration.ofMillis(1200), iterations = 10, executor = executor) {
-                    val combination = (0..9).map { it to ThreadLocalRandom.current().nextBoolean() }
-
-                    override fun run() {
-                        val currentIter = currentIteration.get()
-                        val combinationPart = combination[currentIter]
-                        val batch = AbsoluteBlockBatch()
-                        val schem = numSchems[combinationPart.first]
-
-                        schem.apply(lastRoom.rotation.rotate(Rotation.CLOCKWISE_90)) { pos, block ->
-                            batch.setBlock(pos, block)
-                        }
-                        for (x in -1..1) {
-                            for (y in -1..1) {
-                                batch.setBlock(lightCenterPos.add(lastRoom.rotation.offset().mul(x.toDouble())).add(0.0, y.toDouble(), 0.0), Block.REDSTONE_LAMP.withProperty("lit", combinationPart.second.toString()))
-                            }
-                        }
-
-                        batch.apply(instance) {}
-                    }
-                }
-            }
+//            else if (block.compare(Block.END_STONE_BRICK_WALL)) {
+//                val lastRoom = rooms.last()
+//
+//                val towardsScreenOff = lastRoom.rotation.rotate(Rotation.CLOCKWISE_90).offset()
+//                val roomPos = blockPosition.add(0.5).add(lastRoom.rotation.offset().mul(10.0)).sub(towardsScreenOff.mul(4.0))
+//                val numPastePos = blockPosition.add(lastRoom.rotation.offset().mul(12.0)).add(towardsScreenOff.mul(5.0)).add(0.0, 4.0, 0.0)
+//                val lightCenterPos = blockPosition.add(lastRoom.rotation.offset().mul(8.0)).add(towardsScreenOff.mul(5.0)).add(0.0, 2.0, 0.0)
+//
+//                player.teleport(roomPos.asPos())
+//
+//                object : MinestomRunnable(delay = Duration.ofMillis(1500), repeat = Duration.ofMillis(1200), iterations = 10, group = runnableGroup) {
+//                    val combination = (0..9).map { it to ThreadLocalRandom.current().nextBoolean() }
+//
+//                    override fun run() {
+//                        val currentIter = currentIteration.get()
+//                        val combinationPart = combination[currentIter]
+//                        val batch = AbsoluteBlockBatch()
+//                        val schem = numSchems[combinationPart.first]
+//
+//                        schem.apply(lastRoom.rotation.rotate(Rotation.CLOCKWISE_90)) { pos, block ->
+//                            batch.setBlock(pos, block)
+//                        }
+//                        for (x in -1..1) {
+//                            for (y in -1..1) {
+//                                batch.setBlock(lightCenterPos.add(lastRoom.rotation.offset().mul(x.toDouble())).add(0.0, y.toDouble(), 0.0), Block.REDSTONE_LAMP.withProperty("lit", combinationPart.second.toString()))
+//                            }
+//                        }
+//
+//                        batch.apply(instance) {}
+//                    }
+//                }
+//            }
 
             else if (block.compare(Block.LEVER)) {
                 if (block.getProperty("powered") == "true") return@listenOnly
@@ -464,7 +478,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                     specEntity.setNoGravity(true)
                     specEntity.setInstance(instance, player.position)
 
-                    object : ExecutorRunnable(delay = Duration.ofMillis(650), repeat = Duration.ofMillis(1150), iterations = 3, executor = executor) {
+                    object : MinestomRunnable(delay = Duration.ofMillis(650), repeat = Duration.ofMillis(1150), iterations = 3, group = runnableGroup) {
 
                         override fun run() {
                             val currentIter = currentIteration.get()
@@ -593,16 +607,15 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
             if (activeDoorPosition == Vec.ZERO) return@listenOnly
             if (player.gameMode != GameMode.ADVENTURE) return@listenOnly
             if (generatingRoom.get()) {
-                //player.sendMessage("ALREADY GENERATING!!!!")
                 return@listenOnly
             }
-
-            // Do not open automatically if on a key room
-            if (rooms.last().keyRoom) return@listenOnly
 
             if (stopGenerating.get()) {
                 stopGeneratingDoors.forEach {
                     if (it.distanceSquared(player.position) < doorRange * doorRange) {
+                        // Do not open automatically if on a key room
+                        if (rooms.last().keyRoom) return@listenOnly
+
                         val block = instance.getBlock(it)
                         val facing = block.getProperty("facing")
                         stopGeneratingDoors.remove(it)
@@ -625,6 +638,9 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
             val distanceToDoor = player.position.distanceSquared(activeDoorPosition)
 
             if (distanceToDoor < doorRange * doorRange) {
+                // Do not open automatically if on a key room
+                if (rooms.last().keyRoom) return@listenOnly
+
                 generateNextRoom(instance)
             }
         }
@@ -659,7 +675,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 
             val ticksPerMessage = (20 * 6.5).toInt()
 
-            object : ExecutorRunnable(delay = Duration.ofSeconds(2), repeat = Duration.ofMillis(50), iterations = ticksPerMessage * messages.size, executor = executor) {
+            object : MinestomRunnable(delay = Duration.ofSeconds(2), repeat = Duration.ofMillis(50), iterations = ticksPerMessage * messages.size, group = runnableGroup) {
 
                 override fun run() {
                     val currentIter = currentIteration.get()
@@ -697,7 +713,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
             val secondTitle = ThreadLocalRandom.current().nextInt(30, 45)
             val jumpscare = ThreadLocalRandom.current().nextInt(80, 110)
 
-            object : ExecutorRunnable(repeat = Duration.ofMillis(50), executor = executor, iterations = jumpscare + 24) {
+            object : MinestomRunnable(repeat = Duration.ofMillis(50), group = runnableGroup, iterations = jumpscare + 24) {
                 override fun run() {
                     val currentIter = currentIteration.get()
 
@@ -886,6 +902,8 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
             rushChance += rushChanceIncrease // 10% per room
             eyesChance += eyesChanceIncrease // 0.3% per room
 
+            sendMessage(Component.text("rush chance: ${rushChance}, eyes chance ${eyesChance}"))
+
             // Roll
             val random = ThreadLocalRandom.current()
 
@@ -896,7 +914,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                     rushChance = 1.0
                 } else {
                     spawnRush(instance)
-                    // reset to slightly below 0.0 to fix consecutive encounters
+                    // reset to slightly below 0.0 to stop consecutive encounters
                     rushChance = -rushChanceIncrease
                 }
 
@@ -924,7 +942,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
         val lights = rooms.last().lightBlocks.toMutableList()
 
         if (lights.isNotEmpty()) {
-            object : ExecutorRunnable(repeat = Duration.ofMillis(50), iterations = 40, executor = executor) {
+            object : MinestomRunnable(repeat = Duration.ofMillis(50), iterations = 40, group = runnableGroup) {
                 var lightBreakIndex = 0
                 var loopIndex = 0
                 var nextFlicker = 0
@@ -1004,7 +1022,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
 //        }
 
         entity.setInstance(instance, doorPoses.first()).thenRun {
-            object : ExecutorRunnable(delay = Duration.ofSeconds(2), repeat = Duration.ofMillis(50), executor = executor) {
+            object : MinestomRunnable(delay = Duration.ofSeconds(2), repeat = Duration.ofMillis(50), group = runnableGroup) {
                 var playedSound = false
 
                 var doorIndex = 0.0
@@ -1013,7 +1031,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                 val roomsCopy = rooms.toMutableList()
 
                 var lightRoom: Room? = null
-                var lightBreakTask: ExecutorRunnable? = null
+                var lightBreakTask: MinestomRunnable? = null
 
                 override fun run() {
                     if (!playedSound && entity.position.distanceSquared(doorPoses.last()) < 80 * 80) {
@@ -1070,7 +1088,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
                                 lightBreakTask?.cancel()
                                 lightRoom?.lightBlocks?.clear()
                                 lightRoom = room
-                                lightBreakTask = object : ExecutorRunnable(repeat = Duration.ofMillis(100), executor = executor) {
+                                lightBreakTask = object : MinestomRunnable(repeat = Duration.ofMillis(100), group = runnableGroup) {
                                     override fun run() {
                                         if (lightBreakIndex >= lights.size) return
 
@@ -1203,7 +1221,7 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
             coinBar
         }
 
-        object : ExecutorRunnable(iterations = 25, repeat = Duration.ofMillis(50), executor = executor) {
+        object : MinestomRunnable(iterations = 25, repeat = Duration.ofMillis(50), group = runnableGroup) {
             var i = 1f
 
             override fun run() {
@@ -1236,7 +1254,9 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
     override fun victory(winningPlayers: Collection<Player>) {
     }
 
-    override fun instanceCreate(): Instance {
+    override fun instanceCreate(): CompletableFuture<Instance> {
+        val instanceFuture = CompletableFuture<Instance>()
+
 //        val dim = Manager.dimensionType.getDimension(NamespaceID.from("nolight"))!!
         val dim = Manager.dimensionType.getDimension(NamespaceID.from("fullbrighttt"))!!
         val newInstance = Manager.instance.createInstanceContainer(dim)
@@ -1244,26 +1264,19 @@ class DoorsGame(gameOptions: GameOptions) : Game(gameOptions) {
         newInstance.timeRate = 0
         newInstance.timeUpdate = null
 
-        val range = 2
-        val chunkLatch = CountDownLatch(range + 1 * range + 1)
+        newInstance.enableAutoChunkLoad(true)
 
-        for (x in -range..range) {
-            for (z in -range..range) {
-                newInstance.loadChunk(x, z).thenRun {
+        // 1 chunk required for player to spawn
+        newInstance.loadChunk(0, 0).thenRun { instanceFuture.complete(newInstance) }
 
-                    chunkLatch.countDown()
-                }
+        val radius = 3
+        for (x in -radius..radius) {
+            for (z in -radius..radius) {
+                newInstance.loadChunk(x, z).thenAccept { it.sendChunk() }
             }
         }
-        chunkLatch.await(3, java.util.concurrent.TimeUnit.SECONDS)
 
-//        newInstance.scheduler().buildTask {
-//            newInstance.relight(spawnPosition)
-//        }.delay(30, TimeUnit.SERVER_TICK).schedule()
-
-
-
-        return newInstance
+        return instanceFuture
     }
 
 

@@ -4,7 +4,8 @@ import dev.emortal.doors.damage.HideDamage
 import dev.emortal.doors.pathfinding.offset
 import dev.emortal.doors.pathfinding.rotate
 import dev.emortal.doors.pathfinding.yaw
-import dev.emortal.immortal.util.ExecutorRunnable
+import dev.emortal.immortal.game.Game
+import dev.emortal.immortal.util.MinestomRunnable
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.sound.Sound
 import net.kyori.adventure.sound.SoundStop
@@ -23,17 +24,17 @@ import java.time.Duration
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 
-data class Closet(val game: DoorsGame, val doorDirection: Direction, val rotatedDir: Direction, val yOffset: Double, val pos: Pos) {
+data class Closet(val doorDirection: Direction, val rotatedDir: Direction, val yOffset: Double, val pos: Pos) {
     companion object {
-        val hidingTaskMap = ConcurrentHashMap<UUID, ExecutorRunnable>()
+        val hidingTaskMap = ConcurrentHashMap<UUID, MinestomRunnable>()
         val canLeaveTag = Tag.Boolean("canLeaveCloset")
 
-        fun getFromDoor(game: DoorsGame, block: Block, blockPosition: Point): Closet {
+        fun getFromDoor(block: Block, blockPosition: Point): Closet {
             val doorDirection = Direction.valueOf(block.getProperty("facing").uppercase())
             val rotatedDir = doorDirection.rotate()
             val yOffset = if (block.getProperty("half") == "upper") -1.0 else 0.0
 
-            return Closet(game, doorDirection, rotatedDir, yOffset, Pos(blockPosition.add(0.5, yOffset, 0.5)
+            return Closet(doorDirection, rotatedDir, yOffset, Pos(blockPosition.add(0.5, yOffset, 0.5)
                 .sub(doorDirection.offset())
                 .let {
                     if (block.getProperty("hinge") == "left") it.add(rotatedDir.normalX().toDouble() * 0.5, 0.0, rotatedDir.normalZ().toDouble() * 0.5)
@@ -43,7 +44,7 @@ data class Closet(val game: DoorsGame, val doorDirection: Direction, val rotated
         }
     }
 
-    fun stopHiding(player: Player, blockPosition: Point, block: Block, instance: Instance) {
+    fun stopHiding(game: Game, player: Player, blockPosition: Point, block: Block, instance: Instance) {
         player.sendActionBar(Component.empty())
 
         player.removeTag(DoorsGame.hidingTag)
@@ -69,9 +70,9 @@ data class Closet(val game: DoorsGame, val doorDirection: Direction, val rotated
         player.removeTag(canLeaveTag)
     }
 
-    fun handleInteraction(player: Player, blockPosition: Point, block: Block, instance: Instance) {
+    fun handleInteraction(game: Game, player: Player, blockPosition: Point, block: Block, instance: Instance) {
         if (player.hasTag(DoorsGame.hidingTag)) {
-            if(player.hasTag(canLeaveTag)) stopHiding(player, blockPosition, block, instance)
+            if(player.hasTag(canLeaveTag)) stopHiding(game, player, blockPosition, block, instance)
         } else if (instance.getBlock(pos).compare(Block.STRUCTURE_VOID)) {
             player.sendActionBar(Component.text("There is already someone hiding there", NamedTextColor.RED))
         } else {
@@ -87,7 +88,7 @@ data class Closet(val game: DoorsGame, val doorDirection: Direction, val rotated
 
             player.scheduler().buildTask { player.setTag(canLeaveTag, true) }.delay(Duration.ofMillis(600)).schedule()
 
-            hidingTaskMap[player.uuid] = object : ExecutorRunnable(delay = Duration.ofMillis(5000), repeat = Duration.ofMillis(50), iterations = 200, executor = game.executor) {
+            hidingTaskMap[player.uuid] = object : MinestomRunnable(delay = Duration.ofMillis(5000), repeat = Duration.ofMillis(50), iterations = 200, group = game.runnableGroup) {
                 val titles = listOf("Get out", "get out", "Get out!", "Leave", "leave", "Leave!", "out", "Out", "Out!")
 
                 val titleTimes = listOf(104, 128, 152, 160, 168, 178)
@@ -120,7 +121,7 @@ data class Closet(val game: DoorsGame, val doorDirection: Direction, val rotated
 
                     player.damage(HideDamage(), 8f)
 
-                    stopHiding(player, blockPosition, block, instance)
+                    stopHiding(game, player, blockPosition, block, instance)
                 }
             }
         }

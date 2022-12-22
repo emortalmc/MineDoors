@@ -12,26 +12,31 @@ import dev.emortal.doors.lobby.DoorsLobby
 import dev.emortal.doors.schematic.RoomSchematic
 import dev.emortal.immortal.ImmortalExtension
 import dev.emortal.immortal.config.ConfigHelper
-import dev.emortal.immortal.config.GameOptions
 import dev.emortal.immortal.game.GameManager
-import dev.emortal.immortal.game.WhenToRegisterEvents
+import dev.emortal.immortal.game.GameManager.game
+import dev.emortal.immortal.util.MinestomRunnable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import net.hollowcube.util.schem.SchematicReader
+import net.kyori.adventure.key.Key
+import net.kyori.adventure.sound.Sound
 import net.kyori.adventure.text.Component
 import net.minestom.server.MinecraftServer
 import net.minestom.server.coordinate.Pos
+import net.minestom.server.event.player.PlayerResourcePackStatusEvent
 import net.minestom.server.extras.MojangAuth
 import net.minestom.server.extras.bungee.BungeeCordProxy
 import net.minestom.server.extras.velocity.VelocityProxy
 import net.minestom.server.instance.DynamicChunk
 import net.minestom.server.instance.Instance
+import net.minestom.server.resourcepack.ResourcePackStatus
 import net.minestom.server.utils.NamespaceID
 import net.minestom.server.world.DimensionType
 import org.tinylog.kotlin.Logger
 import world.cepi.kstom.Manager
 import world.cepi.kstom.command.register
+import world.cepi.kstom.event.listenOnly
 import world.cepi.kstom.util.asPos
 import world.cepi.kstom.util.chunksInRange
 import world.cepi.kstom.util.register
@@ -41,6 +46,7 @@ import java.nio.file.FileSystems
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardWatchEventKinds
+import java.time.Duration
 import java.util.*
 import java.util.stream.Collectors
 import kotlin.io.path.absolutePathString
@@ -151,30 +157,42 @@ fun main() {
     GameManager.registerGame<DoorsLobby>(
         "doorslobby",
         Component.text("Doors Lobby"),
-        showsInSlashPlay = false,
-        canSpectate = false,
-        whenToRegisterEvents = WhenToRegisterEvents.IMMEDIATELY,
-        GameOptions(
-            minPlayers = 0,
-            maxPlayers = 30,
-            showScoreboard = false
-        )
+        showsInSlashPlay = false
     )
 
     GameManager.registerGame<DoorsGame>(
         "doors",
         Component.text("Doors"),
         showsInSlashPlay = true, //TODO: change
-        canSpectate = true,
-        whenToRegisterEvents = WhenToRegisterEvents.IMMEDIATELY,
-        GameOptions(
-            minPlayers = 1,
-            maxPlayers = 4,
-            showScoreboard = false
-        )
     )
 
     SignHandler.register()
+
+    MinecraftServer.getGlobalEventHandler().listenOnly<PlayerResourcePackStatusEvent> {
+        when (status) {
+            ResourcePackStatus.SUCCESS -> {
+                player.sendActionBar(Component.text("Resource pack applied successfully"))
+
+                val lobbyGame = player.game as DoorsLobby
+
+                lobbyGame.musicTasks[player.uuid] = object : MinestomRunnable(delay = Duration.ofSeconds(3), repeat = Duration.ofMillis(213_300), group = lobbyGame.runnableGroup) {
+                    override fun run() {
+                        player.playSound(Sound.sound(Key.key("music.dawnofthedoors"), Sound.Source.MASTER, 0.4f, 1f), Sound.Emitter.self())
+                    }
+                }
+            }
+
+            ResourcePackStatus.DECLINED -> {
+                player.kick(Component.text("The resource pack is required. You can ignore the prompt by allowing server resource packs."))
+            }
+
+            ResourcePackStatus.FAILED_DOWNLOAD -> {
+                player.kick(Component.text("The resource pack failed to download. Please contact a staff member.\ndiscord.gg/TZyuMSha96"))
+            }
+
+            else -> {}
+        }
+    }
 
     val properties = loadProperties()
 
